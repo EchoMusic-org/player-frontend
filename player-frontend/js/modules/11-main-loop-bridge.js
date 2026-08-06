@@ -575,6 +575,10 @@ async function loadHostPersistentStorage() {
   var bridgePlaybackClock = { time: 0, duration: 0, playing: false, rate: 1, receivedAt: 0 };
   // 宿主控制能力。
   var bridgeHostControls = { platform: '', showFullscreenButton: true, canShowMiniPlayer: false };
+  // 当前歌曲是否已收藏（红心状态）。
+  var bridgeFavorite = false;
+  // 收藏动作是否正在等待宿主确认。
+  var bridgeFavoriteBusy = false;
   // 播放/暂停乐观状态。
   var bridgePlaybackPending = null;
   // 歌词是否被桥接层强制打开过。
@@ -599,6 +603,175 @@ async function loadHostPersistentStorage() {
   }
   // 暴露调试命令入口，便于宿主或控制台直接发送桥接命令。
   window.__echoBridgeCommand = command;
+
+  // 发起带结果回执的宿主动作请求（收藏、歌单列表、添加到歌单等）。
+  function requestHostAction(action, payload, timeoutMs) {
+    return requestHostBridge('echo-player-frontend:host-request', Object.assign({
+      action: action
+    }, payload ? { payload: payload } : {}), timeoutMs);
+  }
+
+  // 刷新底部控制条收藏按钮的红心状态。
+  function updateFavoriteButton() {
+    var btn = document.getElementById('favorite-btn');
+    if (!btn) return;
+    btn.classList.toggle('active', !!bridgeFavorite);
+    btn.classList.toggle('busy', !!bridgeFavoriteBusy);
+    btn.title = bridgeFavorite ? '取消收藏' : '收藏';
+    btn.setAttribute('aria-label', btn.title);
+  }
+
+  // 切换当前歌曲收藏状态（乐观更新，宿主确认后以快照为准）。
+  function toggleBridgeFavorite(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    if (bridgeFavoriteBusy) return;
+    bridgeFavoriteBusy = true;
+    bridgeFavorite = !bridgeFavorite;
+    updateFavoriteButton();
+    requestHostAction('toggle-favorite').then(function(result) {
+      if (result && result.ok && result.result) {
+        bridgeFavorite = result.result.favorite === true;
+      }
+      if (typeof showToast === 'function') {
+        showToast(bridgeFavorite ? '已收藏' : '已取消收藏');
+      }
+    }).catch(function() {
+      if (typeof showToast === 'function') showToast('收藏操作失败');
+    }).then(function() {
+      bridgeFavoriteBusy = false;
+      updateFavoriteButton();
+      // 宿主后续会推送最新快照，这里主动再取一次，确保红心与真实状态一致。
+      requestHostAction('favorite-status').then(function(status) {
+        if (status && status.ok && status.result) {
+          bridgeFavorite = status.result.favorite === true;
+          updateFavoriteButton();
+        }
+      }).catch(function() {});
+    });
+  }
+
+  // 打开“添加到歌单”对话框并拉取歌单列表。
+  function openAddToPlaylistDialog(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    var mask = document.getElementById('add-to-playlist-dialog');
+    if (!mask) return;
+    var loading = document.getElementById('atp-loading');
+    var status = document.getElementById('atp-status');
+    var queueList = document.getElementById('atp-queue-list');
+    var playlistList = document.getElementById('atp-playlist-list');
+    mask.classList.add('show');
+    mask.setAttribute('aria-hidden', 'false');
+    if (loading) loading.style.display = '';
+    if (status) status.style.display = 'none';
+    if (queueList) queueList.innerHTML = '';
+    if (playlistList) playlistList.innerHTML = '';
+    requestHostAction('playlist-list').then(function(result) {
+      var payload = result && result.ok ? result.result : null;
+      if (loading) loading.style.display = 'none';
+      if (status) status.style.display = '';
+      if (status) {
+        status.textContent = payload && payload.playlists && payload.playlists.length
+          ? ''
+          : (payload && payload.queues && payload.queues.length ? '' : '暂无可用歌单，请先在 EchoMusic 登录账号');
+        status.style.display = status.textContent ? '' : 'none';
+      }
+      if (queueList && payload && Array.isArray(payload.queues)) {
+        queueList.innerHTML = payload.queues.map(function(queue) {
+          return '<button type="button" class="atp-item atp-item--queue" data-id="' + escHtml(String(queue.id)) + '">' +
+            '<span class="atp-item-name">' + escHtml(queue.name || '播放队列') + '</span>' +
+            '<span class="atp-item-count">' + (Number(queue.count) || 0) + ' 首</span>' +
+          '</button>';
+        }).join('');
+      }
+      if (playlistList && payload && Array.isArray(payload.playlists)) {
+        playlistList.innerHTML = payload.playlists.map(function(playlist) {
+          var name = String(playlist.name || '未命名歌单');
+          var badge = playlist.liked ? '<em style="font-style:normal;color:#ff6688;margin-right:6px">♥</em>' : '';
+          return '<button type="button" class="atp-item" data-id="' + escHtml(String(playlist.id)) + '">' +
+            '<span class="atp-item-name">' + badge + escHtml(name) + '</span>' +
+            '<span class="atp-item-count">' + (Number(playlist.count) || 0) + ' 首</span>' +
+          '</button>';
+        }).join('');
+      }
+      if (queueList && !queueList.__atpQueueBound) {
+        queueList.__atpQueueBound = true;
+        queueList.addEventListener('click', function(ev) {
+          var item = ev.target && ev.target.closest ? ev.target.closest('.atp-item') : null;
+          if (!item || !item.dataset || item.dataset.id == null) return;
+          handleQueueSelect(ev, String(item.dataset.id));
+        });
+      }
+      if (playlistList && !playlistList.__atpPlaylistBound) {
+        playlistList.__atpPlaylistBound = true;
+        playlistList.addEventListener('click', function(ev) {
+          var item = ev.target && ev.target.closest ? ev.target.closest('.atp-item') : null;
+          if (!item || !item.dataset || item.dataset.id == null) return;
+          handlePlaylistSelect(ev, String(item.dataset.id));
+        });
+      }
+    }).catch(function() {
+      if (loading) loading.style.display = 'none';
+      if (status) {
+        status.style.display = '';
+        status.textContent = '歌单加载失败，请稍后重试';
+      }
+    });
+  }
+
+  // 关闭“添加到歌单”对话框。
+  function closeAddToPlaylistDialog() {
+    var mask = document.getElementById('add-to-playlist-dialog');
+    if (!mask) return;
+    mask.classList.remove('show');
+    mask.setAttribute('aria-hidden', 'true');
+  }
+
+  // 选择播放队列，把当前歌曲追加到该队列。
+  function handleQueueSelect(e, queueId) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    if (!queueId) return;
+    requestHostAction('queue-add', { queueId: queueId }).then(function(result) {
+      if (result && result.ok && result.result && result.result.added) {
+        if (typeof showToast === 'function') showToast('已添加到播放队列');
+      } else if (typeof showToast === 'function') {
+        showToast('歌曲已在播放队列中');
+      }
+      closeAddToPlaylistDialog();
+    }).catch(function() {
+      if (typeof showToast === 'function') showToast('添加到队列失败');
+      closeAddToPlaylistDialog();
+    });
+  }
+
+  // 选择歌单，把当前歌曲添加到指定歌单。
+  function handlePlaylistSelect(e, listId) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    if (!listId) return;
+    requestHostAction('playlist-add', { listId: listId }).then(function(result) {
+      if (result && result.ok && result.result) {
+        if (result.result.added) {
+          if (typeof showToast === 'function') showToast('已添加到歌单');
+        } else if (result.result.exists) {
+          if (typeof showToast === 'function') showToast('歌单中已有此歌曲');
+        } else {
+          if (typeof showToast === 'function') showToast(result.result.error || '添加到歌单失败');
+        }
+      } else if (typeof showToast === 'function') {
+        showToast('添加到歌单失败');
+      }
+      closeAddToPlaylistDialog();
+    }).catch(function() {
+      if (typeof showToast === 'function') showToast('添加到歌单失败');
+      closeAddToPlaylistDialog();
+    });
+  }
+
+  // 暴露给 HTML inline onclick 使用。
+  window.toggleBridgeFavorite = toggleBridgeFavorite;
+  window.openAddToPlaylistDialog = openAddToPlaylistDialog;
+  window.closeAddToPlaylistDialog = closeAddToPlaylistDialog;
+  window.handleQueueSelect = handleQueueSelect;
+  window.handlePlaylistSelect = handlePlaylistSelect;
 
   // 获取桥接层使用的高精度时间。
   function bridgeNow() {
@@ -1200,6 +1373,8 @@ async function loadHostPersistentStorage() {
     if (!hasTrack) snapshotPlaying = false;
     bridgeSnapshot = snapshot;
     bridgeSnapshot.isPlaying = snapshotPlaying;
+    bridgeFavorite = snapshot.favorite === true;
+    updateFavoriteButton();
     installAudioShim();
     forcePlayerSurface();
 
@@ -1440,6 +1615,11 @@ async function loadHostPersistentStorage() {
       // 阻止旧播放器或浏览器默认处理 Esc。
       e.preventDefault();
       e.stopPropagation();
+      var atpMask = document.getElementById('add-to-playlist-dialog');
+      if (atpMask && atpMask.classList.contains('show')) {
+        closeAddToPlaylistDialog();
+        return;
+      }
       if (wallpaperRuntimeMode) {
         forceWallpaperImmersiveLock();
         return;

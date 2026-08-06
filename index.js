@@ -564,6 +564,135 @@ function parseRangeHeader(rangeHeader, totalSize) {
   return { start, end }
 }
 
+// 取宿主持有当前歌曲的原始对象，收藏/加歌单依赖的 fileId/mixSongId/albumId 等字段只在原始对象里。
+function currentRawTrack(ctx) {
+  return ctx.player.currentTrack.value || ctx.stores.player.currentTrackSnapshot || null
+}
+
+// 把宿主歌单元数据压缩成 iframe 可展示的稳定结构。
+function normalizeHostPlaylist(list) {
+  const source = list || {}
+  const count = Math.max(0, Number(source.count ?? source.songCount ?? 0) || 0)
+  return {
+    id: String(source.listid ?? source.id ?? ''),
+    listid: source.listid ?? source.id ?? null,
+    name: String(source.name || source.title || '未命名歌单'),
+    count,
+    coverUrl: String(source.coverUrl || source.cover || source.picUrl || ''),
+    source: Number(source.source ?? 0),
+    type: Number(source.type ?? 0),
+    isDefault: Boolean(source.isDefault),
+    liked: Boolean(source.isDefault || source.type === 1),
+  }
+}
+
+// 读取收藏状态；未登录或歌单未加载时静默返回 false，不抛错。
+function readFavoriteState(ctx) {
+  try {
+    const playlistStore = ctx.stores.playlist
+    const rawTrack = currentRawTrack(ctx)
+    if (!rawTrack || typeof playlistStore?.isFavoriteSong !== 'function') return false
+    return Boolean(playlistStore.isFavoriteSong(rawTrack))
+  } catch (error) {
+    console.warn('[PlayerFrontendBridge] 读取收藏状态失败', error)
+    return false
+  }
+}
+
+// 执行 iframe / 壁纸网页发来的宿主动作，统一收敛收藏、歌单和播放队列的写操作。
+async function executeHostAction(ctx, action, payload = {}) {
+  const playlistStore = ctx.stores.playlist
+  const normalizedAction = String(action || '').trim() || 'unknown'
+  const rawTrack = currentRawTrack(ctx)
+
+  try {
+    if (normalizedAction === 'favorite-status') {
+      return {
+        favorite: readFavoriteState(ctx),
+        hasTrack: Boolean(rawTrack),
+      }
+    }
+
+    if (normalizedAction === 'favorite' || normalizedAction === 'unfavorite' || normalizedAction === 'toggle-favorite') {
+      if (!rawTrack || typeof playlistStore?.addToFavorites !== 'function') {
+        return { ok: false, error: '当前没有可操作的歌曲' }
+      }
+      const wasFavorite = readFavoriteState(ctx)
+      const wantFavorite =
+        normalizedAction === 'favorite' ? true :
+        normalizedAction === 'unfavorite' ? false :
+        !wasFavorite
+      if (wantFavorite === wasFavorite) {
+        return { ok: true, favorite: wantFavorite, changed: false }
+      }
+      const result = wantFavorite
+        ? await playlistStore.addToFavorites(rawTrack)
+        : await playlistStore.removeFavoriteSong(rawTrack)
+      return { ok: Boolean(result), favorite: wantFavorite && Boolean(result), changed: true }
+    }
+
+    if (normalizedAction === 'playlist-list') {
+      // 歌单未加载时主动向酷狗拉取一次，保证首次打开对话框能看到用户歌单。
+      if (!Array.isArray(playlistStore?.userPlaylists) || playlistStore.userPlaylists.length === 0) {
+        if (typeof playlistStore?.fetchUserPlaylists === 'function') {
+          await playlistStore.fetchUserPlaylists()
+        }
+        if (typeof playlistStore?.ensureLikedPlaylistReady === 'function') {
+          await playlistStore.ensureLikedPlaylistReady()
+        }
+      }
+      const playlists = Array.isArray(playlistStore?.userPlaylists)
+        ? playlistStore.userPlaylists.map(normalizeHostPlaylist).filter((item) => item.id)
+        : []
+      const queues = (Array.isArray(playlistStore?.playbackQueueList) ? playlistStore.playbackQueueList : [])
+        .filter((queue) => String(queue?.id ?? '') !== 'queue:personal-fm')
+        .map((queue) => ({
+          id: String(queue?.id ?? ''),
+          name: String(queue?.title || '播放队列'),
+          count: Math.max(0, Number(queue?.songCount ?? queue?.songs?.length ?? 0) || 0),
+          coverUrl: String(queue?.coverUrl || ''),
+        }))
+        .filter((queue) => queue.id)
+      return {
+        ok: true,
+        playlists,
+        queues,
+        likedListId: String(playlistStore?.likedPlaylistListId ?? playlistStore?.likedPlaylistQueryId ?? ''),
+        hasPlaylists: playlists.length > 0,
+      }
+    }
+
+    if (normalizedAction === 'playlist-add') {
+      const listId = String(payload?.listId ?? payload?.id ?? '').trim()
+      if (!listId || !rawTrack || typeof playlistStore?.addToPlaylist !== 'function') {
+        return { ok: false, error: '缺少歌单或当前歌曲' }
+      }
+      const result = await playlistStore.addToPlaylist(listId, rawTrack)
+      return {
+        ok: result === 'added',
+        added: result === 'added',
+        exists: result === 'exists',
+        result,
+        error: result === 'failed' ? '添加到歌单失败' : '',
+      }
+    }
+
+    if (normalizedAction === 'queue-add') {
+      if (!rawTrack || typeof playlistStore?.appendToPlaybackQueue !== 'function') {
+        return { ok: false, error: '当前没有可操作的歌曲' }
+      }
+      const queueId = payload?.queueId ? String(payload.queueId) : undefined
+      const addedCount = playlistStore.appendToPlaybackQueue?.([rawTrack], queueId ? { queueId } : {}) ?? 0
+      return { ok: addedCount > 0, added: addedCount > 0 }
+    }
+
+    return { ok: false, error: '未知宿主动作' }
+  } catch (error) {
+    console.warn('[PlayerFrontendBridge] 宿主动作执行失败', normalizedAction, error)
+    return { ok: false, error: error?.message || String(error || '宿主动作执行失败') }
+  }
+}
+
 function createPlayerBridgeController(ctx, storageBridge, options = {}) {
   const wallpaper = options.wallpaper === true
 
@@ -663,6 +792,7 @@ function createPlayerBridgeController(ctx, storageBridge, options = {}) {
       currentQueueIndex,
       queue,
       queueId: queueState.queueId,
+      favorite: readFavoriteState(ctx),
       isPlaying: Boolean(player.isPlaying),
       currentTime: Number(player.currentTime || 0),
       duration: Number(player.duration || current?.duration || 0),
@@ -853,6 +983,7 @@ function createPlayerBridgeController(ctx, storageBridge, options = {}) {
     buildHostControlsPayload,
     handleStoragePayload,
     executeCommand,
+    executeHostAction: (action, payload) => executeHostAction(ctx, action, payload),
   }
 }
 
@@ -1021,6 +1152,10 @@ function createWallpaperWebServer(ctx, storageBridge) {
       const result = await bridge.executeCommand(data, { wallpaper: true })
       return jsonResponse(result)
     }
+    if (method === 'POST' && path === '/api/host-action') {
+      const data = requestJson(request)
+      return jsonResponse(await bridge.executeHostAction(data.action, data.payload || {}))
+    }
 
     return textResponse('Not Found', 404)
   }
@@ -1114,6 +1249,7 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
       let lastLyricStoreKey = ''
       let stopTrackWatch = null
       let stopVolumeWatch = null
+      let stopFavoriteWatch = null
       let stopFontWatch = null
       let commandQueue = Promise.resolve()
       // 位置心跳定时器，每 5 秒向 iframe 推送一次当前进度，防止长时间播放后时钟漂移。
@@ -1293,6 +1429,40 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         }
       }
 
+      // 处理 iframe 发来的宿主动作请求（收藏、歌单列表、添加到歌单等），并回传结果。
+      const handleHostRequest = async (data) => {
+        const requestId = data.requestId
+        try {
+          const result = await executeHostAction(ctx, data.action, data.payload || {})
+          replyRequest(requestId, {
+            type: 'echo-player-frontend:host-request-result',
+            ok: result?.ok !== false,
+            result,
+          })
+          // 收藏、加歌单等动作完成后补发一次快照，保证 iframe 内状态与宿主一致。
+          const action = String(data.action || '')
+          if (
+            action === 'favorite' ||
+            action === 'unfavorite' ||
+            action === 'toggle-favorite' ||
+            action === 'playlist-add' ||
+            action === 'queue-add'
+          ) {
+            pushSnapshot(true)
+            pushPosition('command')
+          }
+        } catch (error) {
+          replyRequest(requestId, {
+            type: 'echo-player-frontend:host-request-result',
+            ok: false,
+            result: {
+              ok: false,
+              error: error?.message || String(error || '宿主动作执行失败'),
+            },
+          })
+        }
+      }
+
       // 主动队列可能来自响应式 ref、方法或 store 字段，这里统一取出队列 id、当前项和歌曲列表。
       const getQueueState = () => {
         const activeQueue =
@@ -1399,6 +1569,7 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
           currentQueueIndex,
           queue,
           queueId: queueState.queueId,
+          favorite: readFavoriteState(ctx),
           isPlaying: Boolean(player.isPlaying),
           currentTime: Number(player.currentTime || 0),
           duration: Number(player.duration || current?.duration || 0),
@@ -1524,6 +1695,31 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
           () => Number(ctx.stores.player.volume ?? 0.8),
           () => {
             if (!ready || disposed) return
+            pushSnapshot(true)
+          },
+        )
+      }
+
+      // 监听收藏列表变更（后台加载完成或从其他入口收藏），同步刷新 iframe 内红心状态。
+      const initFavoriteWatch = () => {
+        const playlistStore = ctx.stores.playlist
+        let lastKey = ''
+        const buildKey = () => {
+          try {
+            const favorites = playlistStore?.favorites
+            return Array.isArray(favorites)
+              ? favorites.map((song) => String(song?.id ?? song?.hash ?? '')).join(',')
+              : ''
+          } catch (error) {
+            return ''
+          }
+        }
+        lastKey = buildKey()
+        stopFavoriteWatch = ctx.vue.watch(
+          buildKey,
+          (nextKey) => {
+            if (!ready || disposed || nextKey === lastKey) return
+            lastKey = nextKey
             pushSnapshot(true)
           },
         )
@@ -1737,6 +1933,9 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
           case 'echo-player-frontend:storage':
             void handleStorageRequest(data)
             break
+          case 'echo-player-frontend:host-request':
+            void handleHostRequest(data)
+            break
           case 'echo-player-frontend:background-select':
             void handleBackgroundSelectRequest(data)
             break
@@ -1780,6 +1979,7 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         initLyricStoreSubscription()
         initTrackWatch()
         initVolumeWatch()
+        initFavoriteWatch()
         initFontWatch()
         startPositionHeartbeat()
 
@@ -1821,6 +2021,8 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         stopTrackWatch = null
         if (stopVolumeWatch) stopVolumeWatch()
         stopVolumeWatch = null
+        if (stopFavoriteWatch) stopFavoriteWatch()
+        stopFavoriteWatch = null
         if (stopFontWatch) stopFontWatch()
         stopFontWatch = null
         if (spectrumDispose) spectrumDispose()
@@ -1895,6 +2097,20 @@ export function activate(ctx) {
     console.warn('[PlayerFrontendBridge] SQLite 预热失败', error)
   })
 
+  // 预热收藏歌单：登录用户打开歌词页时心形按钮能立刻反映真实收藏状态。
+  const warmupFavorites = () => {
+    try {
+      const playlistStore = ctx.stores.playlist
+      if (typeof playlistStore?.ensureLikedPlaylistReady === 'function') {
+        void playlistStore.ensureLikedPlaylistReady().catch(() => {})
+      } else if (typeof playlistStore?.fetchUserPlaylists === 'function') {
+        void playlistStore.fetchUserPlaylists().catch(() => {})
+      }
+    } catch (error) {
+      console.warn('[PlayerFrontendBridge] 收藏歌单预热失败', error)
+    }
+  }
+
   // 注册固定 17196 端口的壁纸网页，供本机外部壁纸程序访问。
   void wallpaperServer.start().catch((error) => {
     console.warn('[PlayerFrontendWallpaper] 壁纸服务启动异常', error)
@@ -1910,6 +2126,7 @@ export function activate(ctx) {
   const openOverlay = () => {
     overlayOpen.value = true
     if (ctx.stores.player.isLyricViewOpen) ctx.player.toggleLyricView(false)
+    warmupFavorites()
   }
 
   // 将覆盖层传送到宿主 UI 根节点，由宿主负责生命周期和层级挂载。

@@ -157,6 +157,32 @@
     });
   }
 
+  function handleHostRequest(data) {
+    var action = String(data && data.action || '');
+    postJson('/api/host-action', {
+      action: data.action,
+      payload: data.payload || {}
+    }).then(function(result) {
+      completeRequest(data.requestId, {
+        type: 'echo-player-frontend:host-request-result',
+        ok: !!(result && result.ok !== false),
+        result: result || { ok: false, error: '宿主动作返回为空' }
+      });
+      if (action === 'favorite' || action === 'unfavorite' || action === 'toggle-favorite' || action === 'playlist-add' || action === 'queue-add') {
+        refreshSnapshot().catch(function() {});
+      }
+    }).catch(function(error) {
+      completeRequest(data.requestId, {
+        type: 'echo-player-frontend:host-request-result',
+        ok: false,
+        result: {
+          ok: false,
+          error: error && error.message ? error.message : '宿主动作失败'
+        }
+      });
+    });
+  }
+
   function handleBackgroundResolveRequest(data) {
     postJson('/api/background-resolve', {
       media: data.media || {}
@@ -222,6 +248,8 @@
       handleCommand(data);
     } else if (data.type === 'echo-player-frontend:storage') {
       handleStorageRequest(data);
+    } else if (data.type === 'echo-player-frontend:host-request') {
+      handleHostRequest(data);
     } else if (data.type === 'echo-player-frontend:background-resolve') {
       handleBackgroundResolveRequest(data);
     } else if (data.type === 'echo-player-frontend:background-select') {

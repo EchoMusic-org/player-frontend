@@ -313,6 +313,12 @@
           <div id="control-artist" class="control-artist"></div>
         </div>
       </div>
+      <button id="favorite-btn" class="ctrl-btn" onclick="toggleBridgeFavorite(event)" title="收藏" aria-label="收藏">
+        <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M12 21s-7.5-4.7-10-9.3C.6 8.6 2.4 5 5.9 5c2.2 0 3.7 1.2 4.6 2.6C11.4 6.2 12.9 5 15.1 5c3.5 0 5.3 3.6 3.9 6.7C19.5 16.3 12 21 12 21z"/></svg>
+      </button>
+      <button id="add-playlist-btn" class="ctrl-btn" onclick="openAddToPlaylistDialog(event)" title="添加到歌单" aria-label="添加到歌单">
+        <svg width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24"><path d="M3 12h13"/><path d="M3 6h13"/><path d="M3 18h7"/><path d="M18 9v6"/><path d="M15 12h6"/></svg>
+      </button>
     </div>
     <div class="control-cluster transport">
     <button id="play-mode-btn" class="ctrl-btn" onclick="cyclePlayMode()" title="播放顺序"><svg id="play-mode-icon" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
@@ -340,6 +346,27 @@
 
 
 <div id="toast"></div>
+
+<!-- 添加到歌单对话框 -->
+<div id="add-to-playlist-dialog" class="atp-dialog-mask" onclick="if(event.target===this)closeAddToPlaylistDialog()" aria-hidden="true">
+  <div class="atp-dialog-panel" role="dialog" aria-modal="true" aria-label="添加到歌单">
+    <div class="atp-dialog-head">
+      <div>
+        <div class="atp-dialog-title">添加到歌单</div>
+        <div class="atp-dialog-sub">ADD TO PLAYLIST</div>
+      </div>
+      <button class="atp-dialog-close" type="button" onclick="closeAddToPlaylistDialog()" title="关闭" aria-label="关闭">×</button>
+    </div>
+    <div class="atp-dialog-body">
+      <div class="atp-section-label">播放队列</div>
+      <div id="atp-queue-list" class="atp-list"></div>
+      <div class="atp-section-label">歌单</div>
+      <div id="atp-playlist-list" class="atp-list"></div>
+      <div id="atp-loading" class="atp-loading" style="display:none"><div class="mini-spin"></div><span>正在加载歌单…</span></div>
+      <div id="atp-status" class="atp-status" style="display:none"></div>
+    </div>
+  </div>
+</div>
 
 </div>
 

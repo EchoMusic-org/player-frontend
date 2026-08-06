@@ -129,6 +129,7 @@ window.addEventListener('message', function(event) {
   if (!data || data.source !== ECHO_BRIDGE_PARENT_SOURCE) return;
   if (
     data.type === 'echo-player-frontend:storage-result' ||
+    data.type === 'echo-player-frontend:host-request-result' ||
     data.type === 'echo-player-frontend:background-select-result' ||
     data.type === 'echo-player-frontend:background-resolve-result'
   ) {

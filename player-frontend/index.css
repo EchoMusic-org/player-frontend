@@ -3009,3 +3009,213 @@ html.control-glass-svg-ok #fx-fab {
     grid-template-columns: repeat(3,minmax(0,1fr));
   }
 }
+
+/* ============================================================ */
+/*  歌词页新增：收藏红心 / 添加到歌单 / 右侧播放列表开关           */
+/* ============================================================ */
+#favorite-btn {
+  color: rgba(255,255,255,0.68);
+  transition: color .18s,transform .18s,text-shadow .18s,filter .18s;
+}
+#favorite-btn.active {
+  color: #ff4466;
+  filter: drop-shadow(0 0 7px rgba(255,68,102,.55));
+  animation: favorite-pop .4s cubic-bezier(.16,1,.3,1);
+}
+#favorite-btn.busy {
+  opacity: .5;
+  pointer-events: none;
+}
+@keyframes favorite-pop {
+  0% { transform: scale(.72); }
+  55% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+#add-playlist-btn.active {
+  color: rgba(210,244,241,.90);
+  text-shadow: 0 0 12px rgba(0,245,212,.16);
+}
+
+/* 添加到歌单对话框 */
+.atp-dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4,5,8,.46);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .24s ease;
+}
+.atp-dialog-mask.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+.atp-dialog-panel {
+  width: min(400px,calc(100vw - 40px));
+  max-height: min(560px,calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: linear-gradient(150deg,rgba(22,22,28,.88),rgba(8,8,12,.94));
+  backdrop-filter: blur(30px) saturate(1.1);
+  -webkit-backdrop-filter: blur(30px) saturate(1.1);
+  box-shadow: 0 26px 80px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.07);
+  transform: translateY(14px) scale(.98);
+  transition: transform .26s cubic-bezier(.16,1,.3,1);
+  overflow: hidden;
+}
+.atp-dialog-mask.show .atp-dialog-panel {
+  transform: translateY(0) scale(1);
+}
+.atp-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex: 0 0 auto;
+}
+.atp-dialog-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: rgba(255,255,255,.94);
+  letter-spacing: .4px;
+}
+.atp-dialog-sub {
+  font-size: 9.5px;
+  color: rgba(255,255,255,.32);
+  letter-spacing: 1.6px;
+  margin-top: 3px;
+}
+.atp-dialog-close {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.72);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color .18s,background .18s;
+}
+.atp-dialog-close:hover {
+  color: #fff;
+  background: rgba(255,255,255,.14);
+}
+.atp-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 2px;
+}
+.atp-dialog-body::-webkit-scrollbar {
+  width: 3px;
+}
+.atp-dialog-body::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,.16);
+  border-radius: 999px;
+}
+.atp-section-label {
+  padding: 6px 2px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255,255,255,.42);
+  letter-spacing: .5px;
+}
+.atp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.atp-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.035);
+  color: rgba(255,255,255,.88);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s,background .18s,color .18s,transform .14s;
+}
+.atp-item:hover {
+  border-color: rgba(0,245,212,.4);
+  color: #fff;
+  background: rgba(0,245,212,.06);
+  transform: translateY(-1px);
+}
+.atp-item:active {
+  transform: translateY(0) scale(.985);
+}
+.atp-item--queue {
+  border-style: dashed;
+}
+.atp-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.atp-item-count {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: rgba(255,255,255,.42);
+}
+.atp-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px 0;
+  font-size: 12px;
+  color: rgba(255,255,255,.5);
+}
+.atp-loading .mini-spin {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.16);
+  border-top-color: rgba(0,245,212,.8);
+  animation: atp-spin .7s linear infinite;
+}
+@keyframes atp-spin {
+  to { transform: rotate(360deg); }
+}
+.atp-status {
+  padding: 22px 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,.44);
+}
+@media (max-width:620px) {
+  .atp-dialog-panel {
+    max-height: calc(100vh - 56px);
+  }
+}
