@@ -506,8 +506,6 @@ var fxDefaults = {
   backgroundColor: '#000000',
   // 自定义背景透明度。
   backgroundOpacity: 1,
-  // 底部玻璃控制条色差位移强度。
-  controlGlassChromaticOffset: 90,
   // 是否明确启用自定义背景颜色。
   backgroundColorCustom: false,
   // 旧版自定义背景图片字段，仍用于兼容存档。
@@ -643,7 +641,6 @@ var PACKAGED_DEFAULT_FX_SNAPSHOT = Object.freeze({
   backgroundColorMode: 'cover',
   backgroundColor: '#000000',
   backgroundOpacity: 1,
-  controlGlassChromaticOffset: 90,
   backgroundColorCustom: false,
   floatLayer: false,
   cinema: true,

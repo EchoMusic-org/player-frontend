@@ -413,25 +413,14 @@ updatePlayModeButton(false);
 
 // 控制条玻璃位移图的尺寸缓存状态。
 var controlGlassState = { key: '' };
-// 归一化控制条玻璃色散偏移量。
-function normalizeControlGlassChromaticOffset(value) {
-  // 用户或配置传入值。
-  var n = Number(value);
-  if (!isFinite(n)) n = fxDefaults.controlGlassChromaticOffset;
-  return clampRange(n, 0, 140);
-}
-// 将控制条玻璃色散偏移写入 SVG filter。
+// 将控制条玻璃色散偏移写入 SVG filter（固定为无色差偏移 0）。
 function applyControlGlassChromaticOffset() {
-  if (!fx) return;
-  // 先把运行时配置夹到合法范围。
-  fx.controlGlassChromaticOffset = normalizeControlGlassChromaticOffset(fx.controlGlassChromaticOffset);
   // 控制条玻璃滤镜节点。
   var filter = document.getElementById('mineradio-control-glass-filter');
   if (!filter) return;
-  // 红蓝通道横向偏移量。
-  var dx = String(-Math.round(fx.controlGlassChromaticOffset));
+  // 红蓝通道横向偏移量固定为 0，不产生附加色差位移。
   filter.querySelectorAll('feOffset').forEach(function(node){
-    node.setAttribute('dx', dx);
+    node.setAttribute('dx', '0');
     node.setAttribute('dy', '0');
   });
 }

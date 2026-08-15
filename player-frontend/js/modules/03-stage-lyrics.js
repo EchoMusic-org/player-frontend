@@ -505,8 +505,6 @@ function readSavedLyricLayout() {
     // 背景色和透明度按当前合法范围归一化。
     var savedBgColor = normalizeHexColor(raw.backgroundColor || '#000000', '#000000');
     var savedBgOpacity = clampRange(raw.backgroundOpacity == null ? fxDefaults.backgroundOpacity : Number(raw.backgroundOpacity), 0, 1);
-    // 控制玻璃色散偏移需要限制在 UI 支持范围内。
-    var savedGlassOffset = clampRange(raw.controlGlassChromaticOffset == null ? fxDefaults.controlGlassChromaticOffset : Number(raw.controlGlassChromaticOffset), 0, 140);
     // 背景颜色模式只接受封面或自定义。
     var savedBgMode = /^(cover|custom)$/.test(String(raw.backgroundColorMode || '')) ? String(raw.backgroundColorMode) : '';
     // 兼容旧字段 backgroundColorCustom 和透明度设置。
@@ -568,7 +566,6 @@ function readSavedLyricLayout() {
       backgroundColorMode: savedBgCustom ? 'custom' : 'cover',
       backgroundColor: savedBgColor,
       backgroundOpacity: savedBgOpacity,
-      controlGlassChromaticOffset: savedGlassOffset,
       backgroundColorCustom: savedBgCustom,
       backgroundImage: normalizeCustomBackgroundImage(raw.backgroundImage),
       backgroundMedia: normalizeCustomBackgroundMedia(raw.backgroundMedia || raw.backgroundImage),
@@ -649,7 +646,6 @@ function saveLyricLayout() {
       backgroundColorMode: fx.backgroundColorMode === 'custom' || fx.backgroundColorCustom ? 'custom' : 'cover',
       backgroundColor: normalizeHexColor(fx.backgroundColor || '#000000', '#000000'),
       backgroundOpacity: clampRange(fx.backgroundOpacity == null ? fxDefaults.backgroundOpacity : Number(fx.backgroundOpacity), 0, 1),
-      controlGlassChromaticOffset: clampRange(fx.controlGlassChromaticOffset == null ? fxDefaults.controlGlassChromaticOffset : Number(fx.controlGlassChromaticOffset), 0, 140),
       backgroundColorCustom: fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom,
       backgroundImage: '',
       backgroundMedia: serializeCustomBackgroundMedia(fx.backgroundMedia || fx.backgroundImage),

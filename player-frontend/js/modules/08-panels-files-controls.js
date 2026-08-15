@@ -371,7 +371,6 @@ function normalizeFxArchiveSnapshot(raw) {
     backgroundColorMode: raw.backgroundColorMode === 'custom' || raw.backgroundColorCustom ? 'custom' : 'cover',
     backgroundColor: normalizeHexColor(raw.backgroundColor || fxDefaults.backgroundColor, fxDefaults.backgroundColor),
     backgroundOpacity: archiveNumber(raw, 'backgroundOpacity', fxDefaults.backgroundOpacity, 0, 1),
-    controlGlassChromaticOffset: archiveNumber(raw, 'controlGlassChromaticOffset', fxDefaults.controlGlassChromaticOffset, 0, 140),
     backgroundColorCustom: raw.backgroundColorMode === 'custom' || !!raw.backgroundColorCustom,
     floatLayer: !!raw.floatLayer,
     cinema: raw.cinema !== false,
@@ -1606,13 +1605,12 @@ function setRange(id, value) {
   // 特殊滑块值归一化。
   if (id === 'fx-lyricglow') value = Math.min(0.85, Math.max(0, value));
   if (id === 'fx-coverres') value = normalizeCoverResolution(value);
-  if (id === 'fx-glassaberration') value = normalizeControlGlassChromaticOffset(value);
   el.value = value;
   // 当前滑块旁的输出文本。
   var out = el.parentElement.querySelector('output');
   if (out) out.textContent = id === 'fx-coverres'
     ? coverParticleCountLabel(value)
-    : (id === 'fx-lyricweight' || id === 'fx-glassaberration' || id === 'fx-lyrictiltx' || id === 'fx-lyrictilty' || id === 'fx-shelfangle' ? String(Math.round(Number(value) || 0)) : Number(value).toFixed(id === 'fx-lyricspacing' ? 3 : 2));
+    : (id === 'fx-lyricweight' || id === 'fx-lyrictiltx' || id === 'fx-lyrictilty' || id === 'fx-shelfangle' ? String(Math.round(Number(value) || 0)) : Number(value).toFixed(id === 'fx-lyricspacing' ? 3 : 2));
 }
 // 刷新开发中锁定功能的控件状态。
 function updateDevelopmentFxControls() {
@@ -1712,7 +1710,6 @@ function updateFxInputs() {
   setRange('fx-coverres', fx.coverResolution);
   setRange('fx-lyricglow', fx.lyricGlowStrength);
   setRange('fx-bgopacity', fx.backgroundOpacity == null ? 1 : fx.backgroundOpacity);
-  setRange('fx-glassaberration', fx.controlGlassChromaticOffset);
   setRange('fx-wallpaperopacity', fx.wallpaperOpacity);
   setRange('fx-shelfsize', fx.shelfSize);
   setRange('fx-shelfx', fx.shelfOffsetX);
@@ -1806,7 +1803,6 @@ function resetFxSliderValue(id, key, btn) {
   }
   setRange(id, fx[key]);
   if (key === 'coverResolution') applyCoverParticleResolution(fx[key], { reload: true });
-  if (key === 'controlGlassChromaticOffset') applyControlGlassChromaticOffset();
   syncFxUniforms();
   if (key === 'lyricLetterSpacing' || key === 'lyricLineHeight' || key === 'lyricWeight') refreshCurrentLyricStyle();
   saveLyricLayout();
@@ -1870,7 +1866,7 @@ function fxPanelTargetForNode(node, current) {
   if (id === 'fx-overlay-fold' || id === 'fx-stage-fold') return 'motion';
   if (id === 'fx-advanced' || node.classList.contains('fx-actions')) return 'advanced';
   if (node.classList.contains('lyric-color-row') || node.classList.contains('cover-color-pop') || node.classList.contains('color-lab-pop') || node.classList.contains('cover-color-loupe')) return 'appearance';
-  if (inputId === 'fx-bgopacity' || inputId === 'fx-glassaberration') return 'appearance';
+  if (inputId === 'fx-bgopacity') return 'appearance';
   if (inputId === 'fx-lyricglow') return 'lyrics';
   if (/^fx-(intensity|depth|coverres|cineshake)$/.test(inputId)) return 'motion';
   return current || 'presets';
@@ -2085,7 +2081,6 @@ function relabelFxPanelControls() {
   setFxSliderLabel('fx-cineshake', '电影镜头');
   setFxSliderLabel('fx-lyricglow', '溢光强度');
   setFxSliderLabel('fx-bgopacity', '背景透明度');
-  setFxSliderLabel('fx-glassaberration', '玻璃色差');
   setFxSliderLabel('fx-lyricspacing', '字间距');
   setFxSliderLabel('fx-lyriclineheight', '行距');
   setFxSliderLabel('fx-lyricweight', '字重');
@@ -2122,7 +2117,7 @@ function bindFxPanel() {
   buildLyricColorControls();
   // 滑块 id 与 fx 字段映射。
   var ids = [
-    ['fx-intensity','intensity'],['fx-depth','depth'],['fx-coverres','coverResolution'],['fx-cineshake','cinemaShake'],['fx-lyricglow','lyricGlowStrength'],['fx-bgopacity','backgroundOpacity'],['fx-glassaberration','controlGlassChromaticOffset'],
+    ['fx-intensity','intensity'],['fx-depth','depth'],['fx-coverres','coverResolution'],['fx-cineshake','cinemaShake'],['fx-lyricglow','lyricGlowStrength'],['fx-bgopacity','backgroundOpacity'],
     ['fx-wallpaperopacity','wallpaperOpacity'],
     ['fx-shelfsize','shelfSize'],['fx-shelfx','shelfOffsetX'],['fx-shelfy','shelfOffsetY'],['fx-shelfz','shelfOffsetZ'],['fx-shelfangle','shelfAngleY'],['fx-shelfopacity','shelfOpacity'],['fx-shelfbgalpha','shelfBgOpacity'],
     ['fx-lyricspacing','lyricLetterSpacing'],['fx-lyriclineheight','lyricLineHeight'],['fx-lyricweight','lyricWeight'],
@@ -2154,11 +2149,6 @@ function bindFxPanel() {
         fx.backgroundColorCustom = true;
         updateCustomBackgroundControls();
       }
-      if (pair[1] === 'controlGlassChromaticOffset') {
-        // 玻璃色差需要同步 SVG filter。
-        fx.controlGlassChromaticOffset = normalizeControlGlassChromaticOffset(fx.controlGlassChromaticOffset);
-        applyControlGlassChromaticOffset();
-      }
       // 各特殊滑块范围夹紧。
       if (pair[1] === 'wallpaperOpacity') fx.wallpaperOpacity = clampRange(fx.wallpaperOpacity, 0.35, 1);
       if (pair[1] === 'shelfSize') fx.shelfSize = clampRange(fx.shelfSize, 0.65, 1.45);
@@ -2174,7 +2164,7 @@ function bindFxPanel() {
       if (pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY') fx[pair[1]] = Math.round(clampRange(fx[pair[1]], -42, 42));
       if (out) out.textContent = pair[1] === 'coverResolution'
         ? coverParticleCountLabel(fx.coverResolution)
-        : (pair[1] === 'lyricWeight' || pair[1] === 'controlGlassChromaticOffset' || pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY' || pair[1] === 'shelfAngleY' ? String(Math.round(fx[pair[1]])) : Number(el.value).toFixed(pair[1] === 'lyricLetterSpacing' ? 3 : 2));
+        : (pair[1] === 'lyricWeight' || pair[1] === 'lyricTiltX' || pair[1] === 'lyricTiltY' || pair[1] === 'shelfAngleY' ? String(Math.round(fx[pair[1]])) : Number(el.value).toFixed(pair[1] === 'lyricLetterSpacing' ? 3 : 2));
       syncFxUniforms();
       // 歌单架相关滑块变化后刷新歌单架主题。
       if (/^shelf(Size|OffsetX|OffsetY|OffsetZ|AngleY|Opacity|BgOpacity)$/.test(pair[1]) && shelfManager && shelfManager.refreshTheme) shelfManager.refreshTheme();

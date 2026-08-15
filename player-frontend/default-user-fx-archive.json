@@ -45,7 +45,6 @@
     "backgroundColorMode": "cover",
     "backgroundColor": "#000000",
     "backgroundOpacity": 1,
-    "controlGlassChromaticOffset": 90,
     "backgroundColorCustom": false,
     "floatLayer": false,
     "cinema": true,
@@ -107,7 +106,6 @@
     "sonicGroundFloatingMinSize": 9,
     "sonicGroundFloatingMaxSize": 26,
     "sonicGroundFloatingSpeed": 77,
-    "sonicGroundFloatingCount": 80,
-
+    "sonicGroundFloatingCount": 80
   }
 }
