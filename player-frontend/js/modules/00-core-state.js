@@ -528,6 +528,24 @@ var fxDefaults = {
   lyricGlowParticles: false,
   // 歌词相机锁定开关，开启后歌词相机不会随部分镜头效果移动。
   lyricCameraLock: false,
+  // 舞台歌词同时显示的行数模式：single 单行，dual 双行，triple 三行，cinema 沉浸五行，custom 自定义。
+  lyricDisplayMode: 'single',
+  // custom 模式下的自定义行数。
+  lyricCustomLineCount: 10,
+  // 上下句相对当前句的清晰度，越高上下文越亮。
+  lyricContextOpacity: 0.54,
+  // 上下句之间的纵向间距倍率。
+  lyricContextSpread: 1.96,
+  // 双语翻译模式：off 关闭，current 仅当前句，dual 当前句和下一句，multi 所有可见句。
+  lyricTranslationMode: 'off',
+  // 译文行与所属主行之间的间距倍率。
+  lyricTranslationGap: 0.92,
+  // 译文行相对主行的字号倍率。
+  lyricTranslationScale: 0.65,
+  // 当前句译文的透明度。
+  lyricTranslationOpacity: 0.86,
+  // 多行歌词上下边缘的渐隐强度。
+  lyricEdgeFade: 0.32,
   // 是否显示 3D 粒子歌词。
   particleLyrics: true,    // v7.2: 粒子歌词
   // 是否启用背面封面粒子层。
@@ -622,6 +640,15 @@ var PACKAGED_DEFAULT_FX_SNAPSHOT = Object.freeze({
   lyricTiltX: 0,
   lyricTiltY: 0,
   lyricCameraLock: false,
+  lyricDisplayMode: 'single',
+  lyricCustomLineCount: 10,
+  lyricContextOpacity: 0.54,
+  lyricContextSpread: 1.96,
+  lyricTranslationMode: 'off',
+  lyricTranslationGap: 0.92,
+  lyricTranslationScale: 0.65,
+  lyricTranslationOpacity: 0.86,
+  lyricEdgeFade: 0.32,
   lyricColorMode: 'auto',
   lyricColor: '#a9b8c8',
   lyricHighlightMode: 'auto',

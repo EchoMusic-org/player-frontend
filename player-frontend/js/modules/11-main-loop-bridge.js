@@ -1296,8 +1296,15 @@ async function loadHostPersistentStorage() {
       var start = Math.max(0, startMs || 0) / 1000;
       // 下一行开始秒。
       var next = Math.max(0, nextMs || 0) / 1000;
+      // 当前行主文本。
+      var mainText = String(line.text || '');
       // 当前行显示文本，缺主文本时退回 secondary。
       var text = String(line.text || line.secondary || '');
+      // 副歌词只有在主文本存在时才当作译文；主文本为空时 text 已经消费了 secondary，
+      // 再取一次会让主行和译文行渲染同一句话。
+      var translation = mainText ? String(line.secondary || '').trim() : '';
+      // 译文命中占位文案时同样丢弃，避免出现「暂无歌词」这类译文行。
+      if (translation && isNoLyricText(translation)) translation = '';
       // 逐字歌词统一归一化为旧播放器字符时间结构。
       var characters = normalizeLyricCharacters(line.characters, 'ms');
       return {
@@ -1305,6 +1312,8 @@ async function loadHostPersistentStorage() {
         t: start,
         // 行文本。
         text: text,
+        // 行译文，供双语翻译模式渲染独立译文行；无译文时为空串。
+        translation: translation,
         // 行持续时间，优先使用宿主持续时间，否则用下一行间隔。
         duration: line.duration_ms != null ? Math.max(0.4, Number(line.duration_ms || 0) / 1000) : Number(line.duration || (next > start ? next - start : 4.8)),
         // 逐字歌词数据。

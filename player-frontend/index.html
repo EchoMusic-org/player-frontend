@@ -135,6 +135,28 @@
       <div class="fx-slider"><label>字间距</label><input id="fx-lyricspacing" type="range" min="-0.04" max="0.18" step="0.005"><output></output></div>
       <div class="fx-slider"><label>行距</label><input id="fx-lyriclineheight" type="range" min="0.86" max="1.35" step="0.01"><output></output></div>
       <div class="fx-slider"><label>字重</label><input id="fx-lyricweight" type="range" min="500" max="900" step="50"><output></output></div>
+      <div class="fx-section-label">歌词行数</div>
+      <div class="fx-seg lyric-display-mode-seg" id="lyric-display-mode-seg">
+        <button type="button" data-lyric-display="single">单行</button>
+        <button type="button" data-lyric-display="dual">双行</button>
+        <button type="button" data-lyric-display="triple">三行</button>
+        <button type="button" data-lyric-display="cinema">沉浸</button>
+        <button type="button" data-lyric-display="custom">自定</button>
+      </div>
+      <div class="fx-slider"><label>显示行数</label><input id="fx-lyriccustomlines" type="range" min="1" max="10" step="1"><output></output></div>
+      <div class="fx-slider"><label>上下句清晰</label><input id="fx-lyriccontextopacity" type="range" min="0.25" max="1" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>上下句间距</label><input id="fx-lyriccontextspread" type="range" min="0.60" max="2.40" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>边缘渐隐</label><input id="fx-lyricedgefade" type="range" min="0" max="1" step="0.01"><output></output></div>
+      <div class="fx-section-label">双语翻译</div>
+      <div class="fx-seg lyric-translation-mode-seg" id="lyric-translation-mode-seg">
+        <button type="button" data-lyric-translation="off">关闭</button>
+        <button type="button" data-lyric-translation="current">当前</button>
+        <button type="button" data-lyric-translation="dual">双行</button>
+        <button type="button" data-lyric-translation="multi">多行</button>
+      </div>
+      <div class="fx-slider"><label>译文间距</label><input id="fx-lyrictranslationgap" type="range" min="0.28" max="2.20" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>译文字号</label><input id="fx-lyrictranslationscale" type="range" min="0.46" max="1.12" step="0.01"><output></output></div>
+      <div class="fx-slider"><label>译文透明</label><input id="fx-lyrictranslationopacity" type="range" min="0.20" max="1" step="0.01"><output></output></div>
       <div class="fx-section-label">歌词布局</div>
       <div class="fx-slider"><label>歌词大小</label><input id="fx-lyricscale" type="range" min="0.35" max="1.65" step="0.01"><output></output></div>
       <div class="fx-slider"><label>水平位置</label><input id="fx-lyricx" type="range" min="-2.0" max="2.0" step="0.01"><output></output></div>

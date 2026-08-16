@@ -13,8 +13,19 @@ var stageLyrics = {
   outgoing: [],
   // 当前歌词在解析结果中的索引。
   currentIdx: -1,
-  // 当前歌词文本，用于避免重复创建相同内容。
-  currentText: '',
+  // 当前显示的歌词行清单，元素为 buildStageLyricRowEntries 生成的 entry。
+  currentEntries: null,
+  // 多行轨道当前持有的行对象数组。
+  rows: [],
+  // 行复用索引，键为 lineIndex + ':' + (译文行 t / 主行 p)。
+  rowMap: null,
+  // 轨道滚动相位，单位是主行虚拟索引，每帧向目标行插值。
+  scrollOffset: 0,
+  // 轨道当前对齐的目标行号。
+  targetLineIndex: -1,
+  // 目标行和下一行的虚拟索引缓存，避免每帧重复求前缀和。
+  targetVirtualIndex: 0,
+  nextVirtualIndex: 1,
   // 高频触发的歌词高亮辉光强度。
   highBloom: 0,
   // 节拍触发的歌词发光强度。
@@ -124,6 +135,8 @@ function stageLyricTargetQuaternion(baseQuat, tiltX, tiltY) {
 function getStageLyricLockBounds() {
   // 最大宽高会用于相机锁定模式的安全缩放计算。
   var maxW = 0, maxH = 0;
+  // 多行轨道下真正需要的是整块歌词的上下边界，而不是单行高度。
+  var top = null, bottom = null;
   // 内部辅助函数负责读取单个歌词 mesh 的尺寸。
   function take(mesh) {
     if (!mesh || !mesh.userData || !mesh.userData.lyric) return;
@@ -131,11 +144,23 @@ function getStageLyricLockBounds() {
     var d = mesh.userData.lyric;
     // mesh 可能正在动画缩放，需要把当前 scale 计入包围尺寸。
     var meshScale = Math.max(mesh.scale && isFinite(mesh.scale.x) ? mesh.scale.x : 1, mesh.scale && isFinite(mesh.scale.y) ? mesh.scale.y : 1);
-    maxW = Math.max(maxW, (d.textWorldW || d.worldW || 6.1) * meshScale);
-    maxH = Math.max(maxH, (d.textWorldH || d.worldH || 1.0) * meshScale);
+    var w = (d.textWorldW || d.worldW || 6.1) * meshScale;
+    var h = (d.textWorldH || d.worldH || 1.0) * meshScale;
+    maxW = Math.max(maxW, w);
+    maxH = Math.max(maxH, h);
+    // 行在轨道里的纵向位置决定整块的上下边界。
+    var y = mesh.position && isFinite(mesh.position.y) ? mesh.position.y : 0;
+    top = top == null ? y + h / 2 : Math.max(top, y + h / 2);
+    bottom = bottom == null ? y - h / 2 : Math.min(bottom, y - h / 2);
   }
   take(stageLyrics.current);
   for (var i = 0; i < stageLyrics.outgoing.length; i++) take(stageLyrics.outgoing[i]);
+  // 多行轨道的每一行都要计入，否则相机锁定只按当前行高度算，多行会溢出安全区。
+  for (var r = 0; stageLyrics.rows && r < stageLyrics.rows.length; r++) {
+    take(stageLyrics.rows[r] && stageLyrics.rows[r].mesh);
+  }
+  // 整块高度优先于单行高度。
+  if (top != null && bottom != null) maxH = Math.max(maxH, top - bottom);
   return { w: maxW || 5.4, h: maxH || 0.78 };
 }
 // 计算歌词相机锁定模式下为了完整显示歌词所需的缩放倍率。
@@ -539,6 +564,15 @@ function readSavedLyricLayout() {
       lyricTiltX: clampRange(Number(raw.lyricTiltX) || 0, -42, 42),
       lyricTiltY: clampRange(Number(raw.lyricTiltY) || 0, -42, 42),
       lyricCameraLock: !!raw.lyricCameraLock,
+      lyricDisplayMode: normalizeLyricDisplayMode(raw.lyricDisplayMode || fxDefaults.lyricDisplayMode),
+      lyricCustomLineCount: clampRange(Math.round(raw.lyricCustomLineCount == null ? fxDefaults.lyricCustomLineCount : Number(raw.lyricCustomLineCount)), 1, 10),
+      lyricContextOpacity: clampRange(raw.lyricContextOpacity == null ? fxDefaults.lyricContextOpacity : Number(raw.lyricContextOpacity), 0.25, 1),
+      lyricContextSpread: clampRange(raw.lyricContextSpread == null ? fxDefaults.lyricContextSpread : Number(raw.lyricContextSpread), 0.60, 2.40),
+      lyricTranslationMode: normalizeLyricTranslationMode(raw.lyricTranslationMode || fxDefaults.lyricTranslationMode),
+      lyricTranslationGap: clampRange(raw.lyricTranslationGap == null ? fxDefaults.lyricTranslationGap : Number(raw.lyricTranslationGap), 0.28, 2.20),
+      lyricTranslationScale: clampRange(raw.lyricTranslationScale == null ? fxDefaults.lyricTranslationScale : Number(raw.lyricTranslationScale), 0.46, 1.12),
+      lyricTranslationOpacity: clampRange(raw.lyricTranslationOpacity == null ? fxDefaults.lyricTranslationOpacity : Number(raw.lyricTranslationOpacity), 0.20, 1),
+      lyricEdgeFade: clampRange(raw.lyricEdgeFade == null ? fxDefaults.lyricEdgeFade : Number(raw.lyricEdgeFade), 0, 1),
       lyricColorMode: raw.lyricColorMode === 'custom' ? 'custom' : 'auto',
       lyricColor: normalizeHexColor(raw.lyricColor || '#a9b8c8'),
       lyricHighlightMode: raw.lyricHighlightMode === 'custom' ? 'custom' : 'auto',
@@ -619,6 +653,15 @@ function saveLyricLayout() {
       lyricTiltX: clampRange(Number(fx.lyricTiltX) || 0, -42, 42),
       lyricTiltY: clampRange(Number(fx.lyricTiltY) || 0, -42, 42),
       lyricCameraLock: !!fx.lyricCameraLock,
+      lyricDisplayMode: normalizeLyricDisplayMode(fx.lyricDisplayMode),
+      lyricCustomLineCount: lyricCustomLineCountValue(),
+      lyricContextOpacity: lyricContextOpacityValue(),
+      lyricContextSpread: lyricContextSpreadValue(),
+      lyricTranslationMode: normalizeLyricTranslationMode(fx.lyricTranslationMode),
+      lyricTranslationGap: lyricTranslationGapValue(),
+      lyricTranslationScale: lyricTranslationScaleValue(),
+      lyricTranslationOpacity: lyricTranslationOpacityValue(),
+      lyricEdgeFade: lyricEdgeFadeValue(),
       lyricColorMode: fx.lyricColorMode === 'custom' ? 'custom' : 'auto',
       lyricColor: normalizeHexColor(fx.lyricColor || '#a9b8c8'),
       lyricHighlightMode: fx.lyricHighlightMode === 'custom' ? 'custom' : 'auto',
@@ -1361,6 +1404,8 @@ function applyLyricPaletteToMesh(mesh) {
     if (u.uHiColor) u.uHiColor.value.copy(lyricThreeColor(pal.highlight || pal.primary, '#fff0b8', 0.48));
     if (u.uGlowColor) u.uGlowColor.value.copy(lyricThreeColor(pal.glowColor || pal.secondary || pal.primary, '#9cffdf', 0.36));
     if (u.uSolarColor) u.uSolarColor.value.copy(lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#fff0b8', 0.50));
+    // 译文行用的背面可读材质只有单一 uColor。
+    if (u.uColor) u.uColor.value.copy(lyricThreeColor(pal.highlight || pal.primary, '#eaf6ff', 0.42));
     if (u.uSolar && !isFinite(u.uSolar.value)) u.uSolar.value = 0;
     if (u.uOpacity && !isFinite(u.uOpacity.value)) u.uOpacity.value = 0;
     data.textMat.needsUpdate = true;
@@ -1408,6 +1453,10 @@ function setStageLyricPalette(pal) {
   lyricSunHotColor.copy(lyricThreeColor(stageLyrics.palette.highlight || stageLyrics.palette.primary, '#fff4cc', 0.54));
   applyLyricPaletteToMesh(stageLyrics.current);
   stageLyrics.outgoing.forEach(applyLyricPaletteToMesh);
+  // 多行轨道里的上下文行和译文行同样要跟随色板。
+  for (var pi = 0; stageLyrics.rows && pi < stageLyrics.rows.length; pi++) {
+    if (stageLyrics.rows[pi]) applyLyricPaletteToMesh(stageLyrics.rows[pi].mesh);
+  }
   syncSkullParticleColors();
 }
 // 根据封面主色的 HSL、平均亮度和彩度生成歌词色板。
@@ -1566,27 +1615,34 @@ function lyricThreeColor(css, fallback, minLum) {
 var STAGE_LYRIC_MAX_LINES = 1;
 
 // 将歌词文本绘制成 alpha 遮罩贴图。
-function makeLyricMask(text) {
+function makeLyricMask(text, opts) {
+  opts = opts || {};
+  // 分辨率倍率。当前主行用 1 保持原有清晰度，上下文行和译文行降档换显存与切行开销。
+  // 画布等比缩放，返回值里的 textMin/textMax 是归一化值、世界尺寸由宽高比推导，下游无需感知。
+  var res = clampRange(Number(opts.resolutionScale) || 1, 0.25, 1);
   // 独立 canvas 用于绘制文字遮罩。
   var canvas = document.createElement('canvas');
   // 遮罩固定高分辨率，保证文字边缘细腻。
-  var W = 2048, H = 384;
+  var W = Math.round(2048 * res), H = Math.round(384 * res);
   canvas.width = W; canvas.height = H;
   // 绘制上下文。
   var ctx = canvas.getContext('2d');
   // 文字最大宽度，左右保留边距给辉光和抗锯齿。
-  var maxWidth = W - 190;
+  var maxWidth = W - Math.round(190 * res);
   // 最大行数来自全局歌词配置。
   var maxLines = STAGE_LYRIC_MAX_LINES;
   // 初始字号，从大到小尝试适配。
-  var fontSize = 128;
+  var fontSize = Math.round(128 * res);
+  // 字号下限和步进同样按分辨率缩放，保证适配循环的行为与全分辨率一致。
+  var minFontSize = Math.max(8, Math.round(42 * res));
+  var fontStep = Math.max(1, Math.round(4 * res));
   // 归一化歌词文本空白。
   text = String(text || '').replace(/\s+/g, ' ').trim();
   // 当前适配后的行数组。
   var lines = [text];
   // 当前最宽行宽度。
   var widest = 1;
-  for (; fontSize >= 42; fontSize -= 4) {
+  for (; fontSize >= minFontSize; fontSize -= fontStep) {
     // 设置当前尝试字号。
     ctx.font = lyricFontCss(fontSize);
     // 如果允许多行且超宽，按宽度换行。
@@ -1984,11 +2040,23 @@ function makeLyricShaderMaterial(mask, pal) {
 }
 
 // 根据文本构建完整舞台歌词 mesh 组。
-function buildLyricMesh(text) {
+function buildLyricMesh(text, opts) {
+  opts = opts || {};
+  // 图层档位：full 为当前主行的完整五层，context 为上下文主行，translation 为译文行。
+  // 不传 opts 时行为与改造前完全一致。
+  var variant = opts.variant || 'full';
+  var isTranslation = variant === 'translation';
+  // 太阳辉光和火花只保留给当前主行，避免多行时开销和亮度失控。
+  var wantSun = variant === 'full';
+  var wantSparks = variant === 'full';
+  // 上下文行和当前句译文保留一层弱辉光，其余行不要。
+  var wantGlow = variant === 'full' || opts.glow === true;
+  // 译文行字号小、透明度低，描边层收益不大，省掉一整张同尺寸画布。
+  var wantReadability = !isTranslation;
   // 归一化文本空白。
   text = String(text || '').replace(/\s+/g, ' ').trim();
   // 先生成文字遮罩。
-  var mask = makeLyricMask(text);
+  var mask = makeLyricMask(text, { resolutionScale: opts.resolutionScale });
   // 使用当前舞台歌词色板。
   var pal = stageLyrics.palette;
   // 歌词平面基础世界宽度。
@@ -2002,7 +2070,8 @@ function buildLyricMesh(text) {
   var textWorldH = worldH * ((mask.textHeight || mask.fontSize) / mask.height);
   // 完整歌词组，包含太阳、辉光、可读性层、文字和火花。
   var group = new THREE.Group();
-  group.renderOrder = 42;
+  // 译文行和上下文行压在当前行之后渲染，避免与当前行争 z 序。
+  group.renderOrder = variant === 'full' ? 42 : (isTranslation ? 41.4 : 41.8);
   group.position.set((Math.random() - 0.5) * 0.08, 0.20, 1.46);
   group.scale.setScalar(0.96);
   group.userData.age = 0;
@@ -2011,65 +2080,82 @@ function buildLyricMesh(text) {
   group.userData.floatSeed = Math.random() * 100;
 
   // 太阳辉光材质，位于歌词后方。
-  var sunMat = new THREE.MeshBasicMaterial({
-    map:getLyricSunBloomTexture(), transparent:true, opacity:0,
-    depthWrite:false, depthTest:false, side:THREE.DoubleSide,
-    blending:THREE.AdditiveBlending, color:lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#ffe7a6', 0.50)
-  });
-  // 根据文字实际宽高计算太阳辉光平面尺寸。
-  var sunWorldW = Math.max(textWorldW + worldH * 1.10, textWorldW * 1.18);
-  sunWorldW = Math.min(worldW * 1.16, Math.max(worldH * 1.35, sunWorldW));
-  var sunWorldH = Math.max(worldH * 1.02, Math.min(worldH * 1.54, worldH + textWorldW * 0.070));
-  // 太阳辉光 mesh。
-  var sun = new THREE.Mesh(new THREE.PlaneGeometry(sunWorldW, sunWorldH, 1, 1), sunMat);
-  sun.renderOrder = 40;
-  sun.position.set(0, 0.02, -0.030);
-  sun.scale.set(0.78, 0.58, 1);
-  group.add(sun);
+  var sunMat = null, sun = null;
+  if (wantSun) {
+    sunMat = new THREE.MeshBasicMaterial({
+      map:getLyricSunBloomTexture(), transparent:true, opacity:0,
+      depthWrite:false, depthTest:false, side:THREE.DoubleSide,
+      blending:THREE.AdditiveBlending, color:lyricThreeColor(pal.highlight || pal.secondary || pal.primary, '#ffe7a6', 0.50)
+    });
+    // 根据文字实际宽高计算太阳辉光平面尺寸。
+    var sunWorldW = Math.max(textWorldW + worldH * 1.10, textWorldW * 1.18);
+    sunWorldW = Math.min(worldW * 1.16, Math.max(worldH * 1.35, sunWorldW));
+    var sunWorldH = Math.max(worldH * 1.02, Math.min(worldH * 1.54, worldH + textWorldW * 0.070));
+    // 太阳辉光 mesh。
+    sun = new THREE.Mesh(new THREE.PlaneGeometry(sunWorldW, sunWorldH, 1, 1), sunMat);
+    sun.renderOrder = 40;
+    sun.position.set(0, 0.02, -0.030);
+    sun.scale.set(0.78, 0.58, 1);
+    group.add(sun);
+  }
 
   // 文字辉光贴图和材质。
-  var glowTex = makeLyricGlowTexture(text, mask.fontSize, mask.textWidth, mask.lines, mask.lineHeight, mask.fitScaleX);
-  var glowMat = new THREE.MeshBasicMaterial({
-    map: glowTex, transparent:true, opacity:0, depthWrite:false, depthTest:false,
-    side:THREE.DoubleSide, blending:THREE.AdditiveBlending, color:lyricThreeColor(pal.secondary, '#9cffdf', 0.36)
-  });
-  // 读取辉光贴图元数据用于换算世界尺寸。
-  var glowMeta = glowTex.userData || {};
-  // 辉光平面宽度按贴图实际宽度映射。
-  var glowWorldW = textWorldW * ((glowMeta.width || mask.width) / Math.max(1, glowMeta.textWidth || mask.textWidth));
-  glowWorldW = Math.min(worldW * 1.10, Math.max(textWorldW + worldH * 0.38, glowWorldW));
-  var glowWorldH = worldH * ((glowMeta.height || mask.height) / mask.height);
-  glowWorldH = Math.min(worldH * 1.42, Math.max(worldH * 0.92, glowWorldH));
-  // 辉光 mesh 位于文字后方。
-  var glow = new THREE.Mesh(new THREE.PlaneGeometry(glowWorldW, glowWorldH, 1, 1), glowMat);
-  glow.renderOrder = 41;
-  glow.scale.set(1.0, 1.06, 1);
-  group.add(glow);
+  var glowMat = null, glow = null;
+  if (wantGlow) {
+    var glowTex = makeLyricGlowTexture(text, mask.fontSize, mask.textWidth, mask.lines, mask.lineHeight, mask.fitScaleX);
+    glowMat = new THREE.MeshBasicMaterial({
+      map: glowTex, transparent:true, opacity:0, depthWrite:false, depthTest:false,
+      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, color:lyricThreeColor(pal.secondary, '#9cffdf', 0.36)
+    });
+    // 读取辉光贴图元数据用于换算世界尺寸。
+    var glowMeta = glowTex.userData || {};
+    // 辉光平面宽度按贴图实际宽度映射。
+    var glowWorldW = textWorldW * ((glowMeta.width || mask.width) / Math.max(1, glowMeta.textWidth || mask.textWidth));
+    glowWorldW = Math.min(worldW * 1.10, Math.max(textWorldW + worldH * 0.38, glowWorldW));
+    var glowWorldH = worldH * ((glowMeta.height || mask.height) / mask.height);
+    glowWorldH = Math.min(worldH * 1.42, Math.max(worldH * 0.92, glowWorldH));
+    // 辉光 mesh 位于文字后方。
+    glow = new THREE.Mesh(new THREE.PlaneGeometry(glowWorldW, glowWorldH, 1, 1), glowMat);
+    glow.renderOrder = 41;
+    glow.scale.set(1.0, 1.06, 1);
+    group.add(glow);
+  }
 
   // 可读性层贴图和材质。
-  var readabilityTex = makeLyricReadabilityTexture(mask);
-  var readabilityMat = new THREE.MeshBasicMaterial({
-    map: readabilityTex, transparent:true, opacity:0, depthWrite:false, depthTest:false,
-    side:THREE.DoubleSide
-  });
-  // 可读性层和文字平面同尺寸，只在文字描边区域有 alpha。
-  var readability = new THREE.Mesh(new THREE.PlaneGeometry(worldW, worldH, 1, 1), readabilityMat);
-  readability.renderOrder = 42;
-  readability.position.set(0, 0, -0.012);
-  group.add(readability);
+  var readabilityMat = null, readability = null;
+  if (wantReadability) {
+    var readabilityTex = makeLyricReadabilityTexture(mask);
+    readabilityMat = new THREE.MeshBasicMaterial({
+      map: readabilityTex, transparent:true, opacity:0, depthWrite:false, depthTest:false,
+      side:THREE.DoubleSide
+    });
+    // 可读性层和文字平面同尺寸，只在文字描边区域有 alpha。
+    readability = new THREE.Mesh(new THREE.PlaneGeometry(worldW, worldH, 1, 1), readabilityMat);
+    readability.renderOrder = 42;
+    readability.position.set(0, 0, -0.012);
+    group.add(readability);
+  }
 
-  // 文字本体 shader 和 mesh。
-  var textMat = makeLyricShaderMaterial(mask, pal);
+  // 文字本体材质。译文行不参与卡拉 OK，用没有 uProgress 的背面可读材质。
+  var textMat = isTranslation
+    ? makeLyricBackfaceReadableMaterial({
+        map: mask.texture,
+        opacity: 0,
+        color: lyricThreeColor(pal.highlight || pal.primary, '#eaf6ff', 0.42)
+      })
+    : makeLyricShaderMaterial(mask, pal);
   var textMesh = new THREE.Mesh(geo, textMat);
   textMesh.renderOrder = 43;
   group.add(textMesh);
 
   // 歌词周围火花粒子数量。
   var sparkCount = 132;
+  var ppos = null, pmat = null, sparks = null;
+  if (wantSparks) {
   // 火花粒子几何。
   var pgeo = new THREE.BufferGeometry();
   // 火花粒子位置数组。
-  var ppos = new Float32Array(sparkCount * 3);
+  ppos = new Float32Array(sparkCount * 3);
   // 火花粒子随机种子。
   var pseed = new Float32Array(sparkCount);
   for (var i = 0; i < sparkCount; i++) {
@@ -2086,7 +2172,7 @@ function buildLyricMesh(text) {
   pgeo.setAttribute('position', new THREE.BufferAttribute(ppos, 3));
   pgeo.setAttribute('seed', new THREE.BufferAttribute(pseed, 1));
   // 火花粒子材质，shader 中按 seed 控制大小和闪烁。
-  var pmat = new THREE.ShaderMaterial({
+  pmat = new THREE.ShaderMaterial({
     uniforms: {
       uMap: { value: dotTexture },
       uSize: { value: 0.052 },
@@ -2123,17 +2209,20 @@ function buildLyricMesh(text) {
     transparent:true, depthWrite:false, depthTest:false, blending:THREE.AdditiveBlending
   });
   // 火花粒子对象。
-  var sparks = new THREE.Points(pgeo, pmat);
+  sparks = new THREE.Points(pgeo, pmat);
   sparks.renderOrder = 44;
   sparks.visible = !!fx.lyricGlowParticles;
   group.add(sparks);
+  }
 
   // 把后续更新所需的材质、尺寸和基础粒子位置都挂到 userData。
   group.userData.lyric = {
     mask:mask, textMesh:textMesh, readability:readability, glow:glow, sparks:sparks, sun:sun,
     textMat:textMat, readabilityMat:readabilityMat, glowMat:glowMat, sparkMat:pmat, sunMat:sunMat,
-    basePositions:ppos.slice ? ppos.slice(0) : new Float32Array(ppos),
-    textWorldW:textWorldW, textWorldH:textWorldH, worldW:worldW, worldH:worldH
+    basePositions:ppos ? (ppos.slice ? ppos.slice(0) : new Float32Array(ppos)) : null,
+    textWorldW:textWorldW, textWorldH:textWorldH, worldW:worldW, worldH:worldH,
+    // 图层档位，供行轨道判断该行支持哪些效果。
+    variant:variant, isTranslation:isTranslation
   };
   // 初始没有歌词进度时写入默认进度状态。
   updateLyricMeshProgress(group, null);
@@ -2150,46 +2239,37 @@ function updateLyricMeshProgress(mesh, progress) {
   progress = hasProgress ? Math.max(0, Math.min(1, progress || 0)) : -1;
   // 读取歌词数据并写入 shader uniform。
   var d = mesh.userData.lyric;
+  // 译文行和上下文行用的是没有 uProgress 的材质，不参与逐字高亮。
+  if (!d.textMat || !d.textMat.uniforms || !d.textMat.uniforms.uProgress) return;
   d.textMat.uniforms.uProgress.value = progress;
   // 保存上一帧进度，用于样式重绘后恢复。
   mesh.userData.lastLyricProgress = hasProgress ? progress : 0;
   mesh.userData.hasLyricProgress = hasProgress;
 }
 
-// 显示一行舞台歌词。
-function showStageLine(text, redrawOnly) {
+// 显示一组舞台歌词行。entries 由 buildStageLyricRowEntries 生成，单行模式下长度为 1。
+function showStageLine(entries, redrawOnly) {
   // 确保歌词分组已经创建。
   createLyricsParticles();
   if (!stageLyrics.group) return;
-  // 空文本表示清空歌词。
-  if (!text) { clearStageLyrics(); return; }
-  if (redrawOnly && stageLyrics.current) {
-    // 样式刷新时直接销毁当前 mesh，避免把旧样式放入淡出队列。
-    disposeLyricMesh(stageLyrics.current);
-    stageLyrics.current = null;
-  } else if (stageLyrics.current) {
-    // 正常切句时把当前歌词转入淡出队列。
-    stageLyrics.current.userData.state = 'out';
-    stageLyrics.current.userData.age = 0;
-    stageLyrics.outgoing.push(stageLyrics.current);
-  }
-  // 保存当前文本，后续刷新样式时复用。
-  stageLyrics.currentText = text;
-  // 构建新歌词 mesh 并挂到舞台歌词分组。
-  var mesh = buildLyricMesh(text);
-  stageLyrics.group.add(mesh);
-  stageLyrics.current = mesh;
+  // 空清单表示清空歌词。
+  if (!entries || !entries.length) { clearStageLyrics(); return; }
+  // 保存当前行清单，后续刷新样式时复用。
+  stageLyrics.currentEntries = entries;
+  // 交给行轨道做复用、新建和淘汰；当前主行 mesh 会被写回 stageLyrics.current。
+  syncStageLyricRows(entries, redrawOnly);
 }
 
-// 当前歌词样式变更后重建 mesh，并尽量保留原进度。
+// 当前歌词样式变更后重建整条轨道，并尽量保留原进度。
 function refreshCurrentLyricStyle() {
   // 没有当前歌词时无需刷新。
-  if (!stageLyrics || !stageLyrics.currentText || !stageLyrics.current) return;
+  if (!stageLyrics || stageLyrics.currentIdx < 0) return;
   // 读取旧 mesh 中保存的歌词进度。
-  var userData = stageLyrics.current.userData || {};
+  var userData = (stageLyrics.current && stageLyrics.current.userData) || {};
   var progress = userData.hasLyricProgress ? (userData.lastLyricProgress || 0) : null;
-  // redrawOnly=true 表示只重绘当前样式。
-  showStageLine(stageLyrics.currentText, true);
+  // 按当前行数与翻译模式重新生成行清单，避免沿用切换前那份。
+  // redrawOnly=true 表示只重绘当前样式，不走淡出队列。
+  showStageLine(buildStageLyricRowEntries(stageLyrics.currentIdx), true);
   // 恢复重建前的进度。
   updateLyricMeshProgress(stageLyrics.current, progress);
   // 给新 mesh 一个接近已入场状态的 age，避免样式切换时重新大幅淡入。
@@ -2198,12 +2278,11 @@ function refreshCurrentLyricStyle() {
 
 // 清空当前舞台歌词和所有淡出歌词。
 function clearStageLyrics() {
-  // 释放当前歌词 mesh。
-  disposeLyricMesh(stageLyrics.current);
-  stageLyrics.current = null;
-  // 重置歌词索引和文本缓存。
+  // 释放整条行轨道，其中包含当前主行 mesh，会一并把 stageLyrics.current 置空。
+  clearStageLyricRows();
+  // 重置歌词索引和行清单缓存。
   stageLyrics.currentIdx = -1;
-  stageLyrics.currentText = '';
+  stageLyrics.currentEntries = null;
   // 释放淡出队列中的历史歌词。
   while (stageLyrics.outgoing.length) disposeLyricMesh(stageLyrics.outgoing.pop());
 }
@@ -2582,6 +2661,15 @@ function updateStageLyrics3D(dt) {
   }
   // 更新当前歌词。
   tickMesh(stageLyrics.current, true);
+  // 当前主行之外的上下文行和译文行由行轨道统一驱动，锚定在当前行的漂浮位置上。
+  updateStageLyricRows(dt, {
+    time: t,
+    skullMouthLyrics: skullMouthLyrics,
+    shelfDetailOpen: shelfDetailOpen,
+    shelfDetailProfile: shelfDetailLyricProfile,
+    lyricGlowStrength: lyricGlowStrength,
+    glowDrive: glowDrive
+  });
   // 逆序更新淡出队列，结束的 mesh 直接释放。
   for (var i = stageLyrics.outgoing.length - 1; i >= 0; i--) {
     if (!tickMesh(stageLyrics.outgoing[i], false)) {
@@ -2669,18 +2757,15 @@ function getLyricLineProgress(line, nextLine, now) {
 function tickLyricsParticles() {
   if (!fx.particleLyrics) {
     // 关闭舞台歌词时清理当前和淡出歌词。
-    if (stageLyrics.current || stageLyrics.currentText || (stageLyrics.outgoing && stageLyrics.outgoing.length)) clearStageLyrics();
+    if (stageLyrics.current || (stageLyrics.rows && stageLyrics.rows.length) || (stageLyrics.outgoing && stageLyrics.outgoing.length)) clearStageLyrics();
     return;
   }
   if (!audio || !lyricsLines.length) {
-    // 没有音频或歌词时，把当前歌词转入淡出。
-    if (stageLyrics.current) {
-      stageLyrics.current.userData.state = 'out';
-      stageLyrics.current.userData.age = 0;
-      stageLyrics.outgoing.push(stageLyrics.current);
-      stageLyrics.current = null;
+    // 没有音频或歌词时，把整条轨道转入淡出。
+    if (stageLyrics.current || (stageLyrics.rows && stageLyrics.rows.length)) {
+      retireStageLyricRows();
       stageLyrics.currentIdx = -1;
-      stageLyrics.currentText = '';
+      stageLyrics.currentEntries = null;
     }
     return;
   }
@@ -2697,9 +2782,9 @@ function tickLyricsParticles() {
     return;
   }
   if (newIdx !== stageLyrics.currentIdx) {
-    // 切换到新歌词行。
+    // 切换到新歌词行，按当前行数与翻译模式重新生成整条轨道的行清单。
     stageLyrics.currentIdx = newIdx;
-    showStageLine(lyricsLines[newIdx].text || '');
+    showStageLine(buildStageLyricRowEntries(newIdx));
   }
   if (stageLyrics.current) {
     // 根据当前行逐字信息更新 shader 进度。
