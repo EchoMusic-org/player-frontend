@@ -12,6 +12,7 @@
     'js/modules/02-particle-systems.js',
     'js/modules/03-stage-lyrics.js',
     'js/modules/03b-lyric-row-track.js',
+    'js/modules/03c-lyric-prewarm.js',
     'js/modules/04-visual-analysis-beat.js',
     'js/modules/05-playlist-shelf.js',
     'js/modules/06-api-search.js',

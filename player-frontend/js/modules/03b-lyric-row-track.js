@@ -132,9 +132,10 @@ function buildStageLyricRowEntries(lineIndex) {
       scale: isCurrent ? 1 : clampRange(0.92 - absOff * 0.025, 0.76, 0.98),
       // 当前主行走完整五层高清，上下文主行降档。
       variant: isCurrent ? 'full' : 'context',
-      // glow 只由图层档位决定，不掺 isCurrent 或行距。否则行在窗口里挪动时签名会变，
-      // 触发本可避免的整行重建（重画 canvas + 重传纹理）。
-      glow: !isCurrent,
+      // 上下文行不配辉光层。运行时它的透明度只有 0.08×alpha≈0.04，几乎看不见，
+      // 却要付出一整个大面积 AdditiveBlending 透明四边形的填充成本——
+      // 集显的填充率扛不住多行同时叠加，这是核显卡顿、独显流畅的主因之一。
+      glow: false,
       resolutionScale: isCurrent ? 1 : STAGE_LYRIC_CONTEXT_RESOLUTION
     });
     if (mode === 'off') continue;
@@ -195,7 +196,7 @@ function retireStageLyricRowMesh(mesh) {
   mesh.userData.age = 0;
   stageLyrics.outgoing.push(mesh);
   while (stageLyrics.outgoing.length > STAGE_LYRIC_MAX_OUTGOING) {
-    disposeLyricMesh(stageLyrics.outgoing.shift());
+    queueLyricMeshDispose(stageLyrics.outgoing.shift());
   }
 }
 
@@ -215,7 +216,7 @@ function retireStageLyricRows() {
 function clearStageLyricRows() {
   var rows = stageLyrics.rows;
   for (var i = 0; rows && i < rows.length; i++) {
-    if (rows[i] && rows[i].mesh) disposeLyricMesh(rows[i].mesh);
+    if (rows[i] && rows[i].mesh) queueLyricMeshDispose(rows[i].mesh);
   }
   stageLyrics.rows = [];
   stageLyrics.rowMap = null;
@@ -249,7 +250,8 @@ function syncStageLyricRows(entries, redrawOnly) {
     } else {
       // 需要新建。旧行如果存在，说明是同一行换了档位（例如从上下文行变成当前行），
       // 直接销毁并把位置继承给新 mesh，避免出现两份同样的文字。
-      var mesh = buildLyricMesh(entry.text, {
+      // 优先取用 03c 预热好的 mesh，取不到才现场同步构建。
+      var mesh = takeStageLyricPrewarmMesh(signature) || buildLyricMesh(entry.text, {
         variant: entry.variant,
         glow: entry.glow,
         resolutionScale: entry.resolutionScale
@@ -261,7 +263,7 @@ function syncStageLyricRows(entries, redrawOnly) {
         var oldData = old.mesh.userData ? old.mesh.userData.lyric : null;
         if (oldData) setStageLyricRowOpacity(mesh.userData.lyric, getStageLyricRowOpacity(oldData), entry.isCurrent ? 0.10 : 0.06);
         mesh.userData.age = old.mesh.userData && isFinite(old.mesh.userData.age) ? old.mesh.userData.age : 0;
-        disposeLyricMesh(old.mesh);
+        queueLyricMeshDispose(old.mesh);
         old.mesh = null;
       }
       stageLyrics.group.add(mesh);
@@ -293,7 +295,7 @@ function syncStageLyricRows(entries, redrawOnly) {
     if (!Object.prototype.hasOwnProperty.call(previous, key) || kept[key]) continue;
     var gone = previous[key];
     if (!gone || !gone.mesh) continue;
-    if (redrawOnly) disposeLyricMesh(gone.mesh);
+    if (redrawOnly) queueLyricMeshDispose(gone.mesh);
     else retireStageLyricRowMesh(gone.mesh);
   }
   stageLyrics.rows = nextRows;

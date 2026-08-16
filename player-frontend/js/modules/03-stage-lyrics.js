@@ -1457,6 +1457,9 @@ function setStageLyricPalette(pal) {
   for (var pi = 0; stageLyrics.rows && pi < stageLyrics.rows.length; pi++) {
     if (stageLyrics.rows[pi]) applyLyricPaletteToMesh(stageLyrics.rows[pi].mesh);
   }
+  // 预热缓存里的 mesh 还没挂进场景，色板遍历覆盖不到，这里单独刷一遍。
+  // 只是颜色不对，刷一下就能继续用，不必整批作废重建。
+  applyStageLyricPaletteToPrewarm();
   syncSkullParticleColors();
 }
 // 根据封面主色的 HSL、平均亮度和彩度生成歌词色板。
@@ -1614,6 +1617,25 @@ function lyricThreeColor(css, fallback, minLum) {
 // 舞台歌词最大行数，当前保持单行以适配 3D 舞台构图。
 var STAGE_LYRIC_MAX_LINES = 1;
 
+// 辉光与描边贴图里所有硬编码的模糊半径和线宽下限，都是按 128px 字号调出来的。
+// 字号变化时必须同比缩放，否则小字号的行会得到相对更粗更散的光晕。
+var LYRIC_BLUR_REFERENCE_FONT = 128;
+// 辉光贴图的最小光栅字号。上游实测低于这个值后，字形放大回逻辑平面时会碎成
+// 一颗颗扇贝状光斑（见上游 10-lyrics-mask-textures.js 的 lyricGlowRasterMetrics 注释），
+// 因此这里同样把光栅字号锁在 64px 以上。
+var LYRIC_GLOW_MIN_RASTER_FONT = 64;
+
+// 把参考字号下的模糊半径/线宽换算到当前光栅字号。
+function lyricBlurScaleFor(rasterFontSize) {
+  return clampRange((Number(rasterFontSize) || LYRIC_BLUR_REFERENCE_FONT) / LYRIC_BLUR_REFERENCE_FONT, 0.18, 1.6);
+}
+// 辉光贴图的光栅倍率。辉光本身是大半径模糊，低分辨率绘制再靠 mesh 放大几乎无损，
+// 但不能低于 LYRIC_GLOW_MIN_RASTER_FONT 换算出的下限。
+function lyricGlowPixelScale(fontSize) {
+  fontSize = Math.max(1, Number(fontSize) || LYRIC_BLUR_REFERENCE_FONT);
+  return clampRange(LYRIC_GLOW_MIN_RASTER_FONT / fontSize, 0.5, 1);
+}
+
 // 将歌词文本绘制成 alpha 遮罩贴图。
 function makeLyricMask(text, opts) {
   opts = opts || {};
@@ -1705,6 +1727,9 @@ function makeLyricReadabilityTexture(mask) {
   var lineHeight = mask && mask.lineHeight || fontSize * lyricLineHeightFactor();
   var fitScaleX = mask && mask.fitScaleX || 1;
   canvas.width = W; canvas.height = H;
+  // 上下文行的遮罩按 resolutionScale 降过档，字号随之变小，模糊半径和线宽下限
+  // 必须同比缩小，否则上下文行的描边会比当前主行重一倍。
+  var blurScale = lyricBlurScaleFor(fontSize);
   // 绘制上下文。
   var ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
@@ -1738,36 +1763,36 @@ function makeLyricReadabilityTexture(mask) {
   // Black/white readability layer: text-shaped only, no rectangular backing.
   // 第一层大范围黑色柔影，用于浅色背景可读性。
   ctx.save();
-  ctx.filter = 'blur(14px)';
+  ctx.filter = 'blur(' + (14 * blurScale) + 'px)';
   ctx.globalAlpha = 0.18;
-  ctx.lineWidth = Math.max(18, fontSize * 0.16);
+  ctx.lineWidth = Math.max(18 * blurScale, fontSize * 0.16);
   ctx.strokeStyle = 'rgba(0,0,0,1)';
   strokeLines(0, fontSize * 0.018);
   ctx.restore();
 
   // 第二层较细黑描边，增强字形边界。
   ctx.save();
-  ctx.filter = 'blur(5px)';
+  ctx.filter = 'blur(' + (5 * blurScale) + 'px)';
   ctx.globalAlpha = 0.32;
-  ctx.lineWidth = Math.max(9, fontSize * 0.075);
+  ctx.lineWidth = Math.max(9 * blurScale, fontSize * 0.075);
   ctx.strokeStyle = 'rgba(0,0,0,1)';
   strokeLines(0, fontSize * 0.012);
   ctx.restore();
 
   // 第三层白色柔边，帮助深色背景上的字形分离。
   ctx.save();
-  ctx.filter = 'blur(4px)';
+  ctx.filter = 'blur(' + (4 * blurScale) + 'px)';
   ctx.globalAlpha = 0.15;
-  ctx.lineWidth = Math.max(9, fontSize * 0.070);
+  ctx.lineWidth = Math.max(9 * blurScale, fontSize * 0.070);
   ctx.strokeStyle = 'rgba(255,255,255,1)';
   strokeLines(0, 0);
   ctx.restore();
 
   // 第四层更细的白色边缘，避免文字被暗背景吞掉。
   ctx.save();
-  ctx.filter = 'blur(1.2px)';
+  ctx.filter = 'blur(' + (1.2 * blurScale) + 'px)';
   ctx.globalAlpha = 0.26;
-  ctx.lineWidth = Math.max(3.2, fontSize * 0.030);
+  ctx.lineWidth = Math.max(3.2 * blurScale, fontSize * 0.030);
   ctx.strokeStyle = 'rgba(255,255,255,1)';
   strokeLines(0, 0);
   ctx.restore();
@@ -1802,82 +1827,88 @@ function makeLyricGlowTexture(text, fontSize, textWidth, lines, lineHeight, fitS
   // 行高和文本块高度。
   var lh = lineHeight || fontSize * 1.04;
   var blockH = fontSize + (drawLines.length - 1) * lh;
+  // 逻辑尺寸。下游按它换算辉光平面的世界尺寸，与光栅倍率无关。
+  var logicalW = Math.ceil(measuredWidth + padX * 2);
+  var logicalH = Math.ceil(blockH + padY * 2);
+  // 光栅倍率。辉光整体就是大半径模糊，降分辨率绘制再靠 mesh 放大几乎无损。
+  var pixelScale = lyricGlowPixelScale(fontSize);
   // 最终辉光贴图尺寸。
-  var W = Math.ceil(measuredWidth + padX * 2);
-  var H = Math.ceil(blockH + padY * 2);
+  var W = Math.max(1, Math.round(logicalW * pixelScale));
+  var H = Math.max(1, Math.round(logicalH * pixelScale));
   canvas.width = W; canvas.height = H;
+  // 光栅空间下的字号、行高和块高，后续绘制全部按这套尺寸走。
+  var rasterFont = fontSize * pixelScale;
+  var rasterLh = lh * pixelScale;
+  var rasterBlockH = blockH * pixelScale;
+  // 模糊半径与线宽下限按光栅字号同比缩放，保证各档位的辉光相对强度一致。
+  var blurScale = lyricBlurScaleFor(rasterFont);
   // 绘制上下文。
   var ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  ctx.font = lyricFontCss(fontSize);
+  ctx.font = lyricFontCss(rasterFont);
   // 第一行基线。
-  var y0 = H / 2 - blockH / 2 + fontSize * 0.82;
+  var y0 = H / 2 - rasterBlockH / 2 + rasterFont * 0.82;
   // 按偏移绘制所有辉光文字。
   function drawGlowText(dx, dy) {
     for (var i = 0; i < drawLines.length; i++) {
-      var y = y0 + i * lh + (dy || 0);
+      var y = y0 + i * rasterLh + (dy || 0);
       if (fitScaleX < 1) {
         // 与遮罩一致，超宽歌词使用水平缩放。
         ctx.save();
         ctx.translate(W / 2 + (dx || 0), 0);
         ctx.scale(fitScaleX, 1);
-        if (ctx.lineWidth > 0) lyricStrokeText(ctx, drawLines[i], 0, y, fontSize);
-        lyricFillText(ctx, drawLines[i], 0, y, fontSize);
+        if (ctx.lineWidth > 0) lyricStrokeText(ctx, drawLines[i], 0, y, rasterFont);
+        lyricFillText(ctx, drawLines[i], 0, y, rasterFont);
         ctx.restore();
       } else {
-        if (ctx.lineWidth > 0) lyricStrokeText(ctx, drawLines[i], W / 2 + (dx || 0), y, fontSize);
-        lyricFillText(ctx, drawLines[i], W / 2 + (dx || 0), y, fontSize);
+        if (ctx.lineWidth > 0) lyricStrokeText(ctx, drawLines[i], W / 2 + (dx || 0), y, rasterFont);
+        lyricFillText(ctx, drawLines[i], W / 2 + (dx || 0), y, rasterFont);
       }
     }
   }
   // 小半径强辉光。
   ctx.save();
-  ctx.filter = 'blur(14px)';
+  ctx.filter = 'blur(' + (14 * blurScale) + 'px)';
   ctx.globalAlpha = 0.46;
   ctx.fillStyle = '#fff';
-  ctx.lineWidth = Math.max(10, fontSize * 0.10);
+  ctx.lineWidth = Math.max(10 * blurScale, rasterFont * 0.10);
   ctx.strokeStyle = '#fff';
   drawGlowText(0, 0);
   ctx.restore();
   // 中半径辉光。
   ctx.save();
-  ctx.filter = 'blur(34px)';
+  ctx.filter = 'blur(' + (34 * blurScale) + 'px)';
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = '#fff';
-  ctx.lineWidth = Math.max(18, fontSize * 0.18);
+  ctx.lineWidth = Math.max(18 * blurScale, rasterFont * 0.18);
   ctx.strokeStyle = '#fff';
   drawGlowText(0, 0);
   ctx.restore();
-  // 大半径环境辉光。
+  // 大半径环境辉光。原本这层之外还有一层 blur(116px) 的极大范围弱辉光，
+  // 但它的 3σ 已经超出画布高度、又被纵向遮罩砍掉上下各 16%，投入产出比极低，
+  // 因此去掉，改为把本层的 alpha 从 0.22 提到 0.26 补回中心亮度。
   ctx.save();
-  ctx.filter = 'blur(78px)';
-  ctx.globalAlpha = 0.22;
+  ctx.filter = 'blur(' + (78 * blurScale) + 'px)';
+  ctx.globalAlpha = 0.26;
   ctx.fillStyle = '#fff';
-  ctx.lineWidth = Math.max(28, fontSize * 0.26);
-  ctx.strokeStyle = '#fff';
-  drawGlowText(0, 0);
-  ctx.restore();
-  // 极大范围弱辉光，形成舞台光晕。
-  ctx.save();
-  ctx.filter = 'blur(116px)';
-  ctx.globalAlpha = 0.13;
-  ctx.fillStyle = '#fff';
-  ctx.lineWidth = Math.max(42, fontSize * 0.40);
+  ctx.lineWidth = Math.max(28 * blurScale, rasterFont * 0.26);
   ctx.strokeStyle = '#fff';
   drawGlowText(0, 0);
   ctx.restore();
   // 周向轻微重复绘制，让辉光边缘更饱满。
+  // 采样间距（7/4px）本就小于模糊核半径（8px），8 个方向属于过采样，
+  // 取 4 个方向并把 alpha 加倍，叠加结果几乎一致但少一半绘制。
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.filter = 'blur(8px)';
-  ctx.globalAlpha = 0.26;
+  ctx.filter = 'blur(' + (8 * blurScale) + 'px)';
+  ctx.globalAlpha = 0.52;
   ctx.fillStyle = '#fff';
-  for (var ri = 0; ri < 8; ri++) {
+  for (var ri = 0; ri < 4; ri++) {
     // 围绕文字周边偏移采样。
-    var ang = ri / 8 * Math.PI * 2;
-    drawGlowText(Math.cos(ang) * 7, Math.sin(ang) * 4);
+    var ang = ri / 4 * Math.PI * 2;
+    drawGlowText(Math.cos(ang) * 7 * blurScale, Math.sin(ang) * 4 * blurScale);
   }
   ctx.restore();
   // 用水平和垂直渐变遮罩裁掉贴图边缘。
@@ -1905,7 +1936,7 @@ function makeLyricGlowTexture(text, fontSize, textWidth, lines, lineHeight, fitS
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = false;
-  tex.userData = { width:W, height:H, textWidth:measuredWidth };
+  tex.userData = { width:logicalW, height:logicalH, textWidth:measuredWidth };
   return tex;
 }
 
@@ -2037,6 +2068,66 @@ function makeLyricShaderMaterial(mask, pal) {
     ].join('\n'),
     transparent:true, depthWrite:false, depthTest:false, side:THREE.DoubleSide,
   });
+}
+
+// 每帧的歌词纹理上传预算。CanvasTexture 只在第一次被渲染时才真正走 texImage2D，
+// 一次建行有文字、描边、辉光三张大纹理，同帧全部放行会砸出一个上传尖峰，
+// 因此每帧只放行一层，其余层保持 visible=false 等下一帧。
+// 注意：模块被 index-loader.js 拼成单个 script 执行，顶层 var 的赋值顺序严格按加载列表，
+// 这里必须在声明处就地初始化，不能拆成先声明后赋值。
+var lyricUploadBudget = { frame: 0, remaining: 1 };
+
+// 每帧开头重置上传名额。
+function resetLyricUploadBudget() {
+  lyricUploadBudget.frame += 1;
+  lyricUploadBudget.remaining = 1;
+}
+
+// 放行一个歌词 mesh 里排队等待首次上传的层。每次调用最多放行一层。
+// primaryOnly 为真时只放行文字层：多行模式一次切行有三行共九层排队，
+// 若按行顺序挨个放完，上下文行要等好几帧才有字，先让每一行都出字再补其余层。
+function revealLyricMeshLayers(mesh, primaryOnly) {
+  if (!mesh || !mesh.userData || !mesh.userData.lyric) return;
+  var data = mesh.userData.lyric;
+  var queue = data.uploadQueue;
+  if (!queue || !queue.length) return;
+  // 名额用完就等下一帧，不抢占。
+  if (lyricUploadBudget.remaining <= 0) return;
+  if (primaryOnly && queue[0] !== data.textMesh) return;
+  var layer = queue.shift();
+  if (!layer) return;
+  lyricUploadBudget.remaining -= 1;
+  layer.visible = true;
+}
+
+// 歌词 mesh 的延迟释放队列。texture.dispose() 只是打标记，真正的 gl.deleteTexture
+// 要等下一次渲染才提交；一帧内释放多张大纹理会让驱动停顿（集显上实测 50ms+）。
+// 所以释放同样要限流：mesh 立即脱离场景不再参与渲染，纹理留到后续帧慢慢删。
+var lyricDisposeQueue = [];
+// 每帧常规释放的 mesh 数量。
+var LYRIC_DISPOSE_PER_FRAME = 1;
+
+// 把一个 mesh 排进延迟释放队列。
+function queueLyricMeshDispose(mesh) {
+  if (!mesh) return;
+  // 先脱离场景，视觉上立即消失，纹理稍后再删。
+  if (mesh.parent) mesh.parent.remove(mesh);
+  lyricDisposeQueue.push(mesh);
+}
+
+// 每帧释放队首的少量 mesh。积压过多时（例如连续切歌）适当加快，避免内存堆着不放。
+function drainLyricDisposeQueue() {
+  var budget = lyricDisposeQueue.length > 12 ? 3 : LYRIC_DISPOSE_PER_FRAME;
+  var n = 0;
+  while (lyricDisposeQueue.length && n < budget) {
+    disposeLyricMesh(lyricDisposeQueue.shift());
+    n++;
+  }
+}
+
+// 立即释放全部积压。销毁整个歌词系统时用，此时不会再有帧来排空队列。
+function flushLyricDisposeQueue() {
+  while (lyricDisposeQueue.length) disposeLyricMesh(lyricDisposeQueue.shift());
 }
 
 // 根据文本构建完整舞台歌词 mesh 组。
@@ -2224,6 +2315,16 @@ function buildLyricMesh(text, opts) {
     // 图层档位，供行轨道判断该行支持哪些效果。
     variant:variant, isTranslation:isTranslation
   };
+  // 三张新建的大纹理排队等待首次上传，每帧只放行一层。
+  // 顺序即优先级：文字是主体，先放行；描边和辉光晚一两帧出现，
+  // 而新行本来就是从 uOpacity=0 淡入的，观感上察觉不到。
+  // sun 和 sparks 用的是全局共享纹理（getLyricSunBloomTexture / dotTexture），
+  // 不产生新上传，因此不参与排队。
+  var uploadQueue = [];
+  if (textMesh) { textMesh.visible = false; uploadQueue.push(textMesh); }
+  if (readability) { readability.visible = false; uploadQueue.push(readability); }
+  if (glow) { glow.visible = false; uploadQueue.push(glow); }
+  group.userData.lyric.uploadQueue = uploadQueue;
   // 初始没有歌词进度时写入默认进度状态。
   updateLyricMeshProgress(group, null);
   return group;
@@ -2264,6 +2365,8 @@ function showStageLine(entries, redrawOnly) {
 function refreshCurrentLyricStyle() {
   // 没有当前歌词时无需刷新。
   if (!stageLyrics || stageLyrics.currentIdx < 0) return;
+  // 排版或行数模式变了，预热缓存里那批 mesh 的签名全部作废，直接清掉。
+  clearStageLyricPrewarm();
   // 读取旧 mesh 中保存的歌词进度。
   var userData = (stageLyrics.current && stageLyrics.current.userData) || {};
   var progress = userData.hasLyricProgress ? (userData.lastLyricProgress || 0) : null;
@@ -2280,19 +2383,25 @@ function refreshCurrentLyricStyle() {
 function clearStageLyrics() {
   // 释放整条行轨道，其中包含当前主行 mesh，会一并把 stageLyrics.current 置空。
   clearStageLyricRows();
+  // 预热缓存也一并释放，切歌或回到前奏时不能拿上一首的行顶上去。
+  clearStageLyricPrewarm();
   // 重置歌词索引和行清单缓存。
   stageLyrics.currentIdx = -1;
   stageLyrics.currentEntries = null;
   // 释放淡出队列中的历史歌词。
-  while (stageLyrics.outgoing.length) disposeLyricMesh(stageLyrics.outgoing.pop());
+  while (stageLyrics.outgoing.length) queueLyricMeshDispose(stageLyrics.outgoing.pop());
 }
 
 // 每帧更新舞台歌词的位置、朝向、透明度、辉光和粒子。
 function updateStageLyrics3D(dt) {
   // 分组未创建时无需更新。
   if (!stageLyrics.group) return;
+  // 先释放上一帧排队的 mesh。放在早退判断之前，保证关闭舞台歌词后队列也能排空。
+  drainLyricDisposeQueue();
   // 未启用粒子歌词且没有可见歌词时跳过。
   if (!fx.particleLyrics && !stageLyrics.current && (!stageLyrics.outgoing || !stageLyrics.outgoing.length)) return;
+  // 重置本帧的纹理上传名额。
+  resetLyricUploadBudget();
   // 防止外部异常把缓存数值污染成 NaN。
   if (!isFinite(stageLyrics.highBloom)) stageLyrics.highBloom = 0;
   if (!isFinite(stageLyrics.beatGlow)) stageLyrics.beatGlow = 0;
@@ -2670,13 +2779,28 @@ function updateStageLyrics3D(dt) {
     lyricGlowStrength: lyricGlowStrength,
     glowDrive: glowDrive
   });
-  // 逆序更新淡出队列，结束的 mesh 直接释放。
+  // 逐帧放行等待首次上传的层。先扫一轮只放文字层，保证每一行都尽快有字，
+  // 再回头补描边和辉光。当前主行排在最前，优先级最高。
+  // 淡出队列里的 mesh 不参与：它正在消失，缺一层描边或辉光完全无感，
+  // 让它继续占用上传名额只会拖慢新行上屏。
+  revealLyricMeshLayers(stageLyrics.current, true);
+  for (var ri = 0; stageLyrics.rows && ri < stageLyrics.rows.length; ri++) {
+    revealLyricMeshLayers(stageLyrics.rows[ri] && stageLyrics.rows[ri].mesh, true);
+  }
+  revealLyricMeshLayers(stageLyrics.current, false);
+  for (var rj = 0; stageLyrics.rows && rj < stageLyrics.rows.length; rj++) {
+    revealLyricMeshLayers(stageLyrics.rows[rj] && stageLyrics.rows[rj].mesh, false);
+  }
+  // 逆序更新淡出队列，结束的 mesh 排进延迟释放队列。
   for (var i = stageLyrics.outgoing.length - 1; i >= 0; i--) {
     if (!tickMesh(stageLyrics.outgoing[i], false)) {
-      disposeLyricMesh(stageLyrics.outgoing[i]);
+      queueLyricMeshDispose(stageLyrics.outgoing[i]);
       stageLyrics.outgoing.splice(i, 1);
     }
   }
+  // 每帧只释放少量 mesh，把 gl.deleteTexture 摊到多帧，避免集显上的驱动停顿。
+  // 帧首已经排空过一轮，这里再补一次，让本帧刚淡出的行不必多等一帧。
+  drainLyricDisposeQueue();
 }
 
 // 将宿主提供的逐字歌词时间数据归一化为内部格式。
@@ -2785,6 +2909,8 @@ function tickLyricsParticles() {
     // 切换到新歌词行，按当前行数与翻译模式重新生成整条轨道的行清单。
     stageLyrics.currentIdx = newIdx;
     showStageLine(buildStageLyricRowEntries(newIdx));
+    // 切完立刻开始预热后面的行，让下一次切行能直接取用。
+    requestStageLyricPrewarm();
   }
   if (stageLyrics.current) {
     // 根据当前行逐字信息更新 shader 进度。
@@ -2792,6 +2918,12 @@ function tickLyricsParticles() {
     var nextLine = lyricsLines[newIdx + 1];
     var progress = getLyricLineProgress(curLine, nextLine, t);
     updateLyricMeshProgress(stageLyrics.current, progress);
+    // 当前行过半时再补一次。切行那一次排的队可能因为样式变化被整批丢弃，
+    // 而这时距离下一次切行还有充足时间。内部按行号去重，每行只补一次。
+    // 这里用行时间而不是 progress：普通 LRC 没有逐字数据，getLyricLineProgress 恒为 null。
+    var lineStart = Number(curLine.t) || 0;
+    var lineEnd = nextLine ? Number(nextLine.t) : lineStart + (Number(curLine.duration) || 4.8);
+    if ((t - lineStart) / Math.max(0.2, lineEnd - lineStart) > 0.35) topUpStageLyricPrewarm();
   }
 }
 
@@ -2799,6 +2931,8 @@ function tickLyricsParticles() {
 function disposeLyricsParticles() {
   // 先清理当前歌词和淡出歌词。
   clearStageLyrics();
+  // 整个系统要销毁了，不会再有帧来排空延迟释放队列，这里立即清干净。
+  flushLyricDisposeQueue();
   if (stageLyrics.starRiver) {
     // 星河粒子有独立几何和材质，需要释放。
     if (stageLyrics.starRiver.parent) stageLyrics.starRiver.parent.remove(stageLyrics.starRiver);
