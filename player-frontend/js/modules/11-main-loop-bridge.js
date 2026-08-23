@@ -586,6 +586,25 @@ async function loadHostPersistentStorage() {
   // 播放/暂停乐观状态超时时间。
   var BRIDGE_PLAYBACK_PENDING_TIMEOUT = 1800;
 
+  // 判断宿主是否为 macOS 平台；优先使用宿主上报的平台，init 未到达时退回 UA 同步检测。
+  function isMacHostPlatform() {
+    var reported = String(bridgeHostControls.platform || '').toLowerCase();
+    if (reported) return reported === 'darwin';
+    // init 消息到达前用 navigator 信息兜底，iframe 与宿主同源同 UA。
+    var ua = String(navigator.userAgent || '');
+    var nav = String(navigator.platform || '').toLowerCase();
+    return nav.indexOf('mac') >= 0 || /Macintosh|Mac OS X/.test(ua);
+  }
+
+  // 根据平台检测结果同步 body 上的 mac 平台标记 class。
+  function syncMacPlatformClass() {
+    try {
+      document.body.classList.toggle('echo-mac-platform', isMacHostPlatform());
+    } catch (error) {
+      console.warn('[EchoMusicBridge] 平台标记同步失败', error);
+    }
+  }
+
   // 向父页面发送桥接协议消息。
   function post(type, extra) {
     // 子页面发给宿主的消息统一带 source，父页面只接受这个来源，避免误处理其他窗口消息。
@@ -966,6 +985,8 @@ async function loadHostPersistentStorage() {
       '#echo-bridge-close{position:fixed;z-index:80;top:8px;left:16px;right:auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:rgba(255,255,255,.7);cursor:pointer;padding:0;transition:color .2s ease,background .2s ease}',
       '#echo-bridge-close:hover{color:#fff;background:rgba(255,255,255,.1)}',
       '#echo-bridge-close svg{width:20px;height:20px;display:block;stroke:currentColor}',
+      // macOS 红绿灯占据左上角，返回按钮向右偏移避让（与主程序 OverlayHeader 的 mac-offset 保持一致）。
+      'body.echo-mac-platform #echo-bridge-close{left:80px;right:auto}',
       '#echo-bridge-window-controls{position:fixed;z-index:80;top:0;right:0;height:48px;display:flex;align-items:center;color:rgba(255,255,255,.72)}',
       '.echo-bridge-window-control{width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:inherit;cursor:pointer;padding:0;transition:color .2s ease,background .2s ease,opacity .2s ease}',
       '.echo-bridge-window-control:hover{color:#fff;background:rgba(255,255,255,.1)}',
@@ -1650,6 +1671,8 @@ async function loadHostPersistentStorage() {
       document.body.classList.toggle('wallpaper-runtime-mode', !!wallpaperRuntimeMode);
       playerFrontendVersion = String(initPayload.pluginVersion || '').trim();
       bridgeHostControls = Object.assign(bridgeHostControls, initPayload.hostControls || {});
+      // 宿主平台信息已就绪，刷新 mac 平台标记，保证返回按钮避让位置准确。
+      syncMacPlatformClass();
       applyAppearancePayload(initPayload.appearance);
       forcePlayerSurface();
       if (wallpaperRuntimeMode) setImmersiveMode(true);
@@ -1689,6 +1712,8 @@ async function loadHostPersistentStorage() {
   // 安装桥接专用样式。
   installBridgeStyle();
   // 初始化顺序很重要：先安装样式和伪 audio，再拦截控件、打开歌词、显示等待态，最后通知父页面 ready。
+  // 先同步 mac 平台标记，让返回按钮在 init 到达前就能按 UA 兜底避让红绿灯。
+  syncMacPlatformClass();
   // 安装返回按钮。
   installCloseButton();
   // 安装窗口控制按钮。
