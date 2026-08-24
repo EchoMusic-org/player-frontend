@@ -1254,6 +1254,8 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
       let commandQueue = Promise.resolve()
       // 位置心跳定时器，每 5 秒向 iframe 推送一次当前进度，防止长时间播放后时钟漂移。
       let positionHeartbeatTimer = null
+      // macOS 下红绿灯与 iframe 内返回按钮（left:80px）占据左上角，拖拽条需进一步右移避让。
+      const isMacPlatform = String(window.electron?.platform || '').toLowerCase() === 'darwin'
 
       // 所有发往 iframe 的消息都带上固定 source，子页面据此区分宿主消息和其他窗口消息。
       const postToFrame = (payload) => {
@@ -2054,7 +2056,12 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
             'aria-modal': 'true',
           },
           [
-            h('div', { class: 'epf-bridge-drag-strip' }),
+            // mac 下拖拽条加修饰 class，左边界右移避开红绿灯和 iframe 内返回按钮，防止 drag 区域吞掉按钮点击。
+            h('div', {
+              class: isMacPlatform
+                ? 'epf-bridge-drag-strip epf-bridge-drag-strip--mac'
+                : 'epf-bridge-drag-strip',
+            }),
             iframeSrc.value
               ? h('iframe', {
                   ref: iframeRef,

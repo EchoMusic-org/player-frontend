@@ -30,6 +30,10 @@ body.epf-overlay-open {
   background: transparent;
   -webkit-app-region: drag;
 }
+/* macOS 下返回按钮右移至 left:80px（宽32px），拖拽条左边界随之移到按钮右侧，避免 drag 区域吞掉按钮点击 */
+.epf-bridge-drag-strip--mac {
+  left: 120px;
+}
 .epf-bridge-loading {
   display: flex;
   flex-direction: column;
