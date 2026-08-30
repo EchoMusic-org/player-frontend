@@ -870,6 +870,11 @@ async function loadHostPersistentStorage() {
     return Math.max(0, Math.min(1, value));
   }
 
+  // 把数字夹到 0..100 整数（音量专用）。
+  function clampVolume(value) {
+    return Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  }
+
   // 设置桥接播放时钟当前时间。
   function setBridgeClockTime(value) {
     bridgePlaybackClock.time = Math.max(0, Number(value) || 0);
@@ -1425,9 +1430,9 @@ async function loadHostPersistentStorage() {
     audio.ended = false;
     audio.duration = duration;
     audio.playbackRate = 1;
-    targetVolume = clamp01(snapshot.volume == null ? targetVolume : snapshot.volume);
-    if (targetVolume > 0.01) lastNonZeroVolume = targetVolume;
-    audio.volume = targetVolume;
+    targetVolume = clampVolume(snapshot.volume == null ? targetVolume : snapshot.volume);
+    if (targetVolume > 1) lastNonZeroVolume = targetVolume;
+    audio.volume = targetVolume / 100;
     // 播放模式同步到旧播放器内部枚举。
     playMode = hostModeToMine(snapshot.playMode);
 
@@ -1540,9 +1545,9 @@ async function loadHostPersistentStorage() {
         // 滑动期间实时把音量交给宿主。
         e.stopPropagation();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-        var next = clamp01(Number(volume.value || 0));
+        var next = clampVolume(Number(volume.value || 0));
         targetVolume = next;
-        if (next > 0.01) lastNonZeroVolume = next;
+        if (next > 1) lastNonZeroVolume = next;
         saveStatePatch({ volume: next });
         command('volume', { value: next });
       }, true);
@@ -1550,9 +1555,9 @@ async function loadHostPersistentStorage() {
         // change 事件作为 input 的兜底提交。
         e.stopPropagation();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-        var next = clamp01(Number(volume.value || 0));
+        var next = clampVolume(Number(volume.value || 0));
         targetVolume = next;
-        if (next > 0.01) lastNonZeroVolume = next;
+        if (next > 1) lastNonZeroVolume = next;
         saveStatePatch({ volume: next });
         command('volume', { value: next });
       }, true);
@@ -1560,10 +1565,10 @@ async function loadHostPersistentStorage() {
 
     // 提交桥接音量并同步本地 UI。
     function commitBridgeVolume(value) {
-      // 归一化后的音量。
-      var next = clamp01(value);
+      // 归一化后的音量（0-100）。
+      var next = clampVolume(value);
       targetVolume = next;
-      if (next > 0.01) lastNonZeroVolume = next;
+      if (next > 1) lastNonZeroVolume = next;
       if (typeof updateVolumeUi === 'function') updateVolumeUi();
       saveStatePatch({ volume: next });
       command('volume', { value: next });
@@ -1578,7 +1583,7 @@ async function loadHostPersistentStorage() {
         e.preventDefault();
         e.stopPropagation();
         if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-        commitBridgeVolume(targetVolume > 0.01 ? 0 : (lastNonZeroVolume || 0.8));
+        commitBridgeVolume(targetVolume > 1 ? 0 : (lastNonZeroVolume || 80));
       }, true);
     }
 

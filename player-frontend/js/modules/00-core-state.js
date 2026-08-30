@@ -245,7 +245,7 @@ var aiDepthLastRunAt = 0, aiDepthMinGapMs = 18000;
 // 从宿主数据库状态读取音量，读取失败或值非法时使用最大音量。
 function readSavedVolume() {
   var v = persistedStateSnapshot && Number(persistedStateSnapshot.volume);
-  return isFinite(v) ? Math.max(0, Math.min(1, v)) : 1.0;
+  return isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 100;
 }
 // 读取布尔偏好，启动早期没有数据库状态时使用默认值。
 function readBooleanPreference(key, fallback) {
@@ -262,7 +262,7 @@ function saveBooleanPreference(key, on) {
 // 当前目标音量，启动时从本地存储恢复。
 var targetVolume = readSavedVolume();
 // 最近一次非静音音量，用于静音按钮恢复原音量。
-var lastNonZeroVolume = targetVolume > 0.01 ? targetVolume : 0.8;
+var lastNonZeroVolume = targetVolume > 1 ? targetVolume : 80;
 // 音量浮层自动关闭计时器。
 var volumeCloseTimer = null;
 

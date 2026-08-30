@@ -113,7 +113,7 @@ function playShelfSelectTick(direction, variant) {
 function applyVolumeToAudio() {
   if (audio) {
     audio.muted = false;
-    audio.volume = targetVolume;
+    audio.volume = targetVolume / 100;
   }
 }
 
@@ -128,15 +128,15 @@ function updateVolumeUi() {
   // 音量控件外层。
   var wrap = document.getElementById('volume-control');
   // 当前音量百分比。
-  var pct = Math.round(targetVolume * 100);
-  if (slider && Math.abs(parseFloat(slider.value) - targetVolume) > 0.001) slider.value = targetVolume;
+  var pct = targetVolume;
+  if (slider && Math.abs(parseFloat(slider.value) - targetVolume) > 0.5) slider.value = targetVolume;
   if (value) value.textContent = pct + '%';
-  if (wrap) wrap.classList.toggle('muted', targetVolume <= 0.01);
+  if (wrap) wrap.classList.toggle('muted', targetVolume <= 1);
   if (icon) {
     // 根据音量区间切换静音、低音量和高音量图标。
-    icon.innerHTML = targetVolume <= 0.01
+    icon.innerHTML = targetVolume <= 1
       ? '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="17" y1="9" x2="22" y2="14"/><line x1="22" y1="9" x2="17" y2="14"/>'
-      : targetVolume < 0.45
+      : targetVolume < 45
         ? '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15 10.5a2 2 0 0 1 0 3"/>'
         : '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15 9.5a4 4 0 0 1 0 5"/><path d="M18 7a7 7 0 0 1 0 10"/>';
   }
@@ -144,22 +144,22 @@ function updateVolumeUi() {
 
 // 设置播放器音量并同步宿主。
 function setVolume(value, silent) {
-  // 音量归一化到 0..1。
-  var next = Math.max(0, Math.min(1, Number(value) || 0));
+  // 音量归一化到 0..100。
+  var next = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
   targetVolume = next;
-  if (next > 0.01) lastNonZeroVolume = next;
+  if (next > 1) lastNonZeroVolume = next;
   applyVolumeToAudio();
   updateVolumeUi();
   sendEchoHostCommand('volume', { value: next });
   saveStatePatch({ volume: next });
-  if (!silent) showToast('音量 ' + Math.round(next * 100) + '%');
+  if (!silent) showToast('音量 ' + next + '%');
 }
 // 通过键盘快捷键按步进调整音量。
 function adjustVolumeByKeyboard(delta) {
   // 音量步长。
   var step = Number(delta) || 0;
   if (!step) return;
-  setVolume(clampRange(targetVolume + step, 0, 1), false);
+  setVolume(clampRange(targetVolume + step, 0, 100), false);
 }
 
 // 保持音量浮层打开。
@@ -189,7 +189,7 @@ function volumeWheelDelta(e) {
   // macOS 和 Windows 滚轮方向习惯差异。
   var platform = String(navigator.platform || '').toLowerCase();
   var direction = platform.indexOf('mac') >= 0 ? 1 : -1;
-  return (normalized / 120) * 0.05 * direction;
+  return (normalized / 120) * 5 * direction;
 }
 
 // 计算滚轮调整后的目标音量。
@@ -197,7 +197,7 @@ function targetVolumeAfterWheel(e) {
   // 滚轮音量增量。
   var delta = volumeWheelDelta(e);
   if (!delta) return targetVolume;
-  return clampRange(targetVolume + delta, 0, 1);
+  return clampRange(targetVolume + delta, 0, 100);
 }
 
 // 静音和恢复上次非零音量。
@@ -206,7 +206,7 @@ function toggleMute(e) {
     e.preventDefault();
     e.stopPropagation();
   }
-  setVolume(targetVolume > 0.01 ? 0 : (lastNonZeroVolume || 0.8), true);
+  setVolume(targetVolume > 1 ? 0 : (lastNonZeroVolume || 80), true);
 }
 
 // 绑定音量控件事件。
