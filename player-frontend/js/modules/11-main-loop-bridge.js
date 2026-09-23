@@ -1067,24 +1067,35 @@ async function loadHostPersistentStorage() {
 
     // macOS 使用宿主原生红绿灯按钮，子页面不再绘制右侧窗口按钮。
     var isMac = String(bridgeHostControls.platform || '').toLowerCase() === 'darwin';
+    // 宿主是否以系统原生按钮接管右上角（>=2.3.2-beta.2 的 Windows/Linux）。
+    var hostsNative = bridgeHostControls.nativeWindowControls === true;
     // 将要渲染的按钮配置列表。
     var buttons = [];
     if (bridgeHostControls.canShowMiniPlayer) {
       buttons.push({ title: 'mini 模式', icon: 'mini', command: 'mini-player', extraClass: 'echo-bridge-window-control--mini' });
     }
     if (!isMac) {
-      buttons.push({ title: '最小化', icon: 'minimize', action: 'minimize' });
+      // 全屏按钮：宿主自绘的全屏按钮会被本覆盖层遮挡，需由插件继续提供。
       if (bridgeHostControls.showFullscreenButton !== false) {
         buttons.push({ title: '全屏', icon: 'fullscreen', action: 'fullscreen' });
       }
-      buttons.push({ title: '最大化', icon: 'maximize', action: 'maximize' });
-      buttons.push({ title: '关闭', icon: 'close', action: 'close', extraClass: 'echo-bridge-window-control--close' });
+      // 宿主使用原生窗口按钮时，最小化/最大化/关闭由系统绘制，插件不再自绘，避免与右上角原生按钮重叠。
+      if (!hostsNative) {
+        buttons.push({ title: '最小化', icon: 'minimize', action: 'minimize' });
+        buttons.push({ title: '最大化', icon: 'maximize', action: 'maximize' });
+        buttons.push({ title: '关闭', icon: 'close', action: 'close', extraClass: 'echo-bridge-window-control--close' });
+      }
     }
     if (!buttons.length) return;
 
     // 右上角窗口控制容器。
     var controls = document.createElement('div');
     controls.id = 'echo-bridge-window-controls';
+    // 存在系统原生窗口按钮时，把剩余按钮整体右移其预留宽度，避开右上角系统按钮并留出间隙。
+    var inset = Number(bridgeHostControls.windowControlsInset) || 0;
+    if (hostsNative && inset > 0) {
+      controls.style.right = inset + 'px';
+    }
     buttons.forEach(function(options) {
       // 逐个创建并插入窗口控制按钮。
       controls.appendChild(createBridgeWindowButton(options));
@@ -1686,6 +1697,10 @@ async function loadHostPersistentStorage() {
       loadHostPersistentStorage().catch(function(err){ console.warn('[存储] 初始化失败', err); });
       // 初始化完成后主动索要一次完整快照。
       post('echo-player-frontend:request-snapshot');
+    } else if (data.type === 'echo-player-frontend:host-controls') {
+      // 宿主窗口能力变更（缩放/全屏等导致原生按钮预留宽度变化），刷新并重装窗口控制按钮。
+      bridgeHostControls = Object.assign(bridgeHostControls, data.payload || {});
+      installWindowControls();
     } else if (data.type === 'echo-player-frontend:snapshot') {
       // 完整快照同步当前歌曲、队列、音量和播放状态。
       applySnapshot(data.payload);
