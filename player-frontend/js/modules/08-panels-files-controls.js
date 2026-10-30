@@ -377,10 +377,13 @@ function normalizeFxArchiveSnapshot(raw) {
     visualTintColor: normalizeHexColor(raw.visualTintColor || fxDefaults.visualTintColor),
     uiAccentColor: normalizeHexColor(raw.uiAccentColor || fxDefaults.uiAccentColor, fxDefaults.uiAccentColor),
     visualIconColor: normalizeHexColor(raw.visualIconColor || fxDefaults.visualIconColor, fxDefaults.visualIconColor),
-    backgroundColorMode: raw.backgroundColorMode === 'custom' || raw.backgroundColorCustom ? 'custom' : 'cover',
+    // 背景颜色模式：transparent（透出宿主窗口材质）/ custom（自定义纯色）/ cover（封面渐变）
+    backgroundColorMode: raw.backgroundColorMode === 'transparent'
+      ? 'transparent'
+      : (raw.backgroundColorMode === 'custom' || raw.backgroundColorCustom ? 'custom' : 'cover'),
     backgroundColor: normalizeHexColor(raw.backgroundColor || fxDefaults.backgroundColor, fxDefaults.backgroundColor),
     backgroundOpacity: archiveNumber(raw, 'backgroundOpacity', fxDefaults.backgroundOpacity, 0, 1),
-    backgroundColorCustom: raw.backgroundColorMode === 'custom' || !!raw.backgroundColorCustom,
+    backgroundColorCustom: raw.backgroundColorMode === 'transparent' || raw.backgroundColorMode === 'custom' || !!raw.backgroundColorCustom,
     floatLayer: !!raw.floatLayer,
     cinema: raw.cinema !== false,
     edge: !!raw.edge,
@@ -992,6 +995,16 @@ function setVisualIconColor(color, silent) {
 function resetVisualIconColor() {
   setVisualIconColor(fxDefaults.visualIconColor || '#7fd8ff');
 }
+// 透明背景 scrim 颜色：参照主程序歌词页与 folia 插件的取值。
+// 毛玻璃固定 rgba(0,0,0,0.55)；透明窗口按宿主不透明度等比弱化（alpha 直接烘进颜色，与整层 opacity 等效）；
+// 宿主未开启窗口背景时无材质可透，回退不透明黑。
+function transparentBackgroundColor() {
+  var state = windowBackgroundState || {};
+  if (!state.enabled) return '#000000';
+  if (state.frosted) return 'rgba(0, 0, 0, 0.55)';
+  var alpha = 0.55 * clampRange(state.opacity == null ? 1 : Number(state.opacity), 0, 1);
+  return 'rgba(0, 0, 0, ' + alpha.toFixed(3) + ')';
+}
 // 应用自定义背景颜色、图片或视频。
 function applyCustomBackground() {
   // 背景纯色。
@@ -1004,8 +1017,10 @@ function applyCustomBackground() {
   var hasVideo = !!(media && media.type === 'video');
   // 背景媒体透明度。
   var opacity = clampRange(fx.backgroundOpacity == null ? 1 : Number(fx.backgroundOpacity), 0, 1);
+  // 是否处于透明背景模式（直接透出宿主窗口毛玻璃/透明材质）。
+  var transparentBg = fx.backgroundColorMode === 'transparent';
   // 是否启用自定义颜色。
-  var customColor = fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom;
+  var customColor = transparentBg || fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom;
   // 是否需要覆盖默认封面背景。
   var override = !!media || customColor || opacity < 1;
   // 文档根节点。
@@ -1014,7 +1029,9 @@ function applyCustomBackground() {
   var layer = document.getElementById('custom-bg');
   // 自定义背景视频节点。
   var video = document.getElementById('custom-bg-video');
-  root.style.setProperty('--custom-bg-color', color);
+  root.style.setProperty('--custom-bg-color', transparentBg ? transparentBackgroundColor() : color);
+  // 透明模式让出 html/body 与 #custom-bg 的底色，宿主窗口材质经宿主侧透明覆盖层透出
+  root.classList.toggle('fx-bg-transparent', transparentBg);
   document.body.classList.toggle('custom-background-override', override);
   document.body.classList.toggle('custom-background-flat', override && !media);
   document.body.classList.toggle('custom-background-video', hasVideo);
@@ -1071,17 +1088,35 @@ function updateCustomBackgroundControls() {
   var imageValue = document.getElementById('bg-image-value');
   // 是否处于自定义颜色模式。
   var customColor = fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom;
+  // 是否处于透明背景模式。
+  var transparentBg = fx.backgroundColorMode === 'transparent';
   if (picker) picker.value = color;
-  if (value) value.textContent = customColor ? color.toUpperCase() : '\u5c01\u9762\u6e10\u53d8';
+  if (value) value.textContent = transparentBg ? '透明' : (customColor ? color.toUpperCase() : '\u5c01\u9762\u6e10\u53d8');
   if (picker && picker.closest) {
     // 给控件行打上封面模式状态。
     var row = picker.closest('.lyric-color-row');
-    if (row) row.classList.toggle('bg-cover-mode', !customColor);
+    if (row) {
+      row.classList.toggle('bg-cover-mode', !customColor && !transparentBg);
+      row.classList.toggle('bg-transparent-mode', transparentBg);
+    }
   }
   setRange('fx-bgopacity', fx.backgroundOpacity == null ? 1 : fx.backgroundOpacity);
   if (imageValue) imageValue.textContent = customBackgroundMediaLabel(fx.backgroundMedia || fx.backgroundImage);
   applyBackgroundMediaHint();
+  // 向宿主上报背景是否处于透明模式：宿主据此让出覆盖层背景、隐藏主界面并回推窗口背景状态。
+  // 以去重标记避免状态加载等场景下的重复发送；宿主回推的 window-background 只触发 applyCustomBackground，不会成环。
+  syncBackgroundModeToHost();
 }
+// 背景透明模式上次上报值，去重用。
+var lastSyncedBackgroundMode = null;
+// 把透明背景模式的开/关同步给宿主（postParentBridgeMessage 定义在 00 模块，壁纸模式下为无害 no-op）。
+function syncBackgroundModeToHost() {
+  var mode = fx.backgroundColorMode === 'transparent' ? 'transparent' : 'other';
+  if (lastSyncedBackgroundMode === mode) return;
+  lastSyncedBackgroundMode = mode;
+  postParentBridgeMessage('echo-player-frontend:background-mode', { mode: mode });
+}
+// 设置自定义背景颜色。
 // 设置自定义背景颜色。
 function setCustomBackgroundColor(color, silent, customFlag) {
   fx.backgroundColor = normalizeHexColor(color || '#000000', '#000000');
@@ -1103,6 +1138,15 @@ function setCustomBackgroundCoverMode(silent) {
 // 重置自定义背景颜色。
 function resetCustomBackgroundColor() {
   setCustomBackgroundCoverMode(false);
+}
+// 将背景颜色切换为透明模式：不绘制背景，直接透出宿主窗口的毛玻璃/透明材质。
+// scrim 由 applyCustomBackground 按宿主推送的窗口背景状态取值，未开启窗口背景时回退不透明黑。
+function setCustomBackgroundTransparent(silent) {
+  fx.backgroundColorMode = 'transparent';
+  fx.backgroundColorCustom = true;
+  updateCustomBackgroundControls();
+  saveLyricLayout();
+  if (!silent) showToast('背景颜色: 透明');
 }
 // 设置自定义背景透明度。
 function setCustomBackgroundOpacity(value, silent) {

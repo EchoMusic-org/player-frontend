@@ -34,6 +34,24 @@ body.epf-overlay-open {
 .epf-bridge-drag-strip--mac {
   left: 120px;
 }
+/* ===== 透明背景色模式（iframe 上报 echo-player-frontend:background-mode 时由 index.js 挂 epf-transparent-bg） ===== */
+/* 容器与 iframe 让出背景，透出宿主窗口的毛玻璃/透明材质 */
+body.epf-transparent-bg .epf-bridge-page,
+body.epf-transparent-bg .epf-bridge-frame {
+  background: transparent;
+}
+/* 与主程序歌词页同款处理：隐藏主界面，避免透明覆盖层透出主 UI
+   （主程序自建规则只认 .lyric-overlay-host，本插件开启时该宿主不存在，需自建） */
+html.app-background-enabled body.epf-transparent-bg .main-layout {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0 !important;
+  transition: none !important;
+}
+/* 透明窗口下让出全局背景层（::before 为主界面兜底色，歌词页打开时主程序同样将其隐藏） */
+html.app-background-transparent:has(body.epf-transparent-bg)::before {
+  display: none;
+}
 .epf-bridge-loading {
   display: flex;
   flex-direction: column;

@@ -530,11 +530,11 @@ function readSavedLyricLayout() {
     // 背景色和透明度按当前合法范围归一化。
     var savedBgColor = normalizeHexColor(raw.backgroundColor || '#000000', '#000000');
     var savedBgOpacity = clampRange(raw.backgroundOpacity == null ? fxDefaults.backgroundOpacity : Number(raw.backgroundOpacity), 0, 1);
-    // 背景颜色模式只接受封面或自定义。
-    var savedBgMode = /^(cover|custom)$/.test(String(raw.backgroundColorMode || '')) ? String(raw.backgroundColorMode) : '';
-    // 兼容旧字段 backgroundColorCustom 和透明度设置。
+    // 背景颜色模式只接受封面、自定义或透明（透明=透出宿主窗口材质）。
+    var savedBgMode = /^(cover|custom|transparent)$/.test(String(raw.backgroundColorMode || '')) ? String(raw.backgroundColorMode) : '';
+    // 兼容旧字段 backgroundColorCustom 和透明度设置；transparent 视为显式覆盖。
     var savedBgCustom = savedBgMode
-      ? savedBgMode === 'custom'
+      ? savedBgMode !== 'cover'
       : (raw.backgroundColorCustom === true || (raw.backgroundColorCustom !== false && savedBgColor !== '#000000') || savedBgOpacity < 1);
     // 歌单架相机模式会影响默认角度。
     var savedShelfCameraMode = normalizeShelfCameraMode(raw.shelfCameraMode || fxDefaults.shelfCameraMode);
@@ -597,10 +597,11 @@ function readSavedLyricLayout() {
       visualTintColor: normalizeHexColor(raw.visualTintColor || '#9db8cf'),
       uiAccentColor: normalizeHexColor(raw.uiAccentColor || '#00f5d4', '#00f5d4'),
       visualIconColor: normalizeHexColor(raw.visualIconColor || fxDefaults.visualIconColor || '#7fd8ff', '#7fd8ff'),
-      backgroundColorMode: savedBgCustom ? 'custom' : 'cover',
+      // 保留 transparent 模式；其余按显式自定义标记回退 custom/cover
+      backgroundColorMode: savedBgMode === 'transparent' ? 'transparent' : (savedBgCustom ? 'custom' : 'cover'),
       backgroundColor: savedBgColor,
       backgroundOpacity: savedBgOpacity,
-      backgroundColorCustom: savedBgCustom,
+      backgroundColorCustom: savedBgMode === 'transparent' || savedBgCustom,
       backgroundImage: normalizeCustomBackgroundImage(raw.backgroundImage),
       backgroundMedia: normalizeCustomBackgroundMedia(raw.backgroundMedia || raw.backgroundImage),
       performanceBackground: normalizePerformanceBackgroundMode(raw.performanceBackground, raw.liveBackgroundKeep === true),
@@ -686,10 +687,13 @@ function saveLyricLayout() {
       visualTintColor: normalizeHexColor(fx.visualTintColor || '#9db8cf'),
       uiAccentColor: normalizeHexColor(fx.uiAccentColor || '#00f5d4', '#00f5d4'),
       visualIconColor: normalizeHexColor(fx.visualIconColor || '#7fd8ff', '#7fd8ff'),
-      backgroundColorMode: fx.backgroundColorMode === 'custom' || fx.backgroundColorCustom ? 'custom' : 'cover',
+      // 透明模式原样保存，其余按显式自定义标记归并为 custom/cover
+      backgroundColorMode: fx.backgroundColorMode === 'transparent'
+        ? 'transparent'
+        : (fx.backgroundColorMode === 'custom' || fx.backgroundColorCustom ? 'custom' : 'cover'),
       backgroundColor: normalizeHexColor(fx.backgroundColor || '#000000', '#000000'),
       backgroundOpacity: clampRange(fx.backgroundOpacity == null ? fxDefaults.backgroundOpacity : Number(fx.backgroundOpacity), 0, 1),
-      backgroundColorCustom: fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom,
+      backgroundColorCustom: fx.backgroundColorMode === 'transparent' || fx.backgroundColorMode === 'custom' || !!fx.backgroundColorCustom,
       backgroundImage: '',
       backgroundMedia: serializeCustomBackgroundMedia(fx.backgroundMedia || fx.backgroundImage),
       performanceBackground: normalizePerformanceBackgroundMode(fx.performanceBackground, fx.liveBackgroundKeep === true),

@@ -1687,6 +1687,10 @@ async function loadHostPersistentStorage() {
       document.body.classList.toggle('wallpaper-runtime-mode', !!wallpaperRuntimeMode);
       playerFrontendVersion = String(initPayload.pluginVersion || '').trim();
       bridgeHostControls = Object.assign(bridgeHostControls, initPayload.hostControls || {});
+      // 宿主窗口背景有效状态：透明背景色在状态加载前已可能渲染，靠 init 补齐 scrim
+      if (initPayload.windowBackground) {
+        applyWindowBackgroundState(initPayload.windowBackground);
+      }
       // 宿主平台信息已就绪，刷新 mac 平台标记，保证返回按钮避让位置准确。
       syncMacPlatformClass();
       applyAppearancePayload(initPayload.appearance);

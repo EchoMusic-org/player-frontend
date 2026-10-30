@@ -314,6 +314,23 @@ function text(value, fallback = '') {
   return resolved || fallback
 }
 
+// 读取宿主窗口背景有效状态（根元素 class + 计算样式）：
+// 主程序 applyWindowBackground 已把生效形态落到 html class 与 --app-background-opacity，
+// 这里只读取不重复判定，iframe 的透明背景色模式据此生成 scrim。
+function readWindowBackgroundState() {
+  const root = document.documentElement
+  const enabled = root.classList.contains('app-background-enabled')
+  const frosted = root.classList.contains('app-background-frosted')
+  let opacity = 1
+  if (enabled) {
+    const parsed = Number.parseFloat(
+      getComputedStyle(root).getPropertyValue('--app-background-opacity'),
+    )
+    if (Number.isFinite(parsed)) opacity = Math.min(1, Math.max(0, parsed))
+  }
+  return { enabled, frosted, opacity }
+}
+
 // 不同来源的歌曲对象字段名不一致，这里提取最适合展示的标题。
 function trackTitle(track) {
   return text(track?.title || track?.name || track?.songname, '未知歌曲')
@@ -828,6 +845,10 @@ function createPlayerBridgeController(ctx, storageBridge, options = {}) {
     wallpaperMode: wallpaper,
   })
 
+  // 读取宿主窗口背景有效状态，透明背景色模式据此生成 scrim。
+  // 壁纸网页经 HTTP 取值（一次性），壁纸外层窗口本身不透明，透明模式在该端表现为不透明深色底。
+  const buildWindowBackgroundPayload = () => readWindowBackgroundState()
+
   const handleStoragePayload = async (data) => {
     const action = String(data?.action || 'unknown').trim() || 'unknown'
     const key = String(data?.key || '').trim()
@@ -981,6 +1002,7 @@ function createPlayerBridgeController(ctx, storageBridge, options = {}) {
     buildSnapshot,
     buildAppearancePayload,
     buildHostControlsPayload,
+    buildWindowBackgroundPayload,
     handleStoragePayload,
     executeCommand,
     executeHostAction: (action, payload) => executeHostAction(ctx, action, payload),
@@ -1107,6 +1129,7 @@ function createWallpaperWebServer(ctx, storageBridge) {
           wallpaperMode: true,
           pluginVersion: String(ctx.manifest?.version || ''),
           hostControls: bridge.buildHostControlsPayload(),
+          windowBackground: bridge.buildWindowBackgroundPayload(),
           appearance: bridge.buildAppearancePayload(),
         },
         snapshot: bridge.buildSnapshot(),
@@ -1251,6 +1274,7 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
       let stopVolumeWatch = null
       let stopFavoriteWatch = null
       let stopFontWatch = null
+      let stopWindowBackgroundWatch = null
       let commandQueue = Promise.resolve()
       // 位置心跳定时器，每 5 秒向 iframe 推送一次当前进度，防止长时间播放后时钟漂移。
       let positionHeartbeatTimer = null
@@ -1686,6 +1710,37 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         })
       }
 
+      // 推送宿主窗口背景有效状态（透明背景色模式据此生成 scrim）。
+      const pushWindowBackground = () => {
+        if (!ready || disposed) return
+        postToFrame({
+          type: 'echo-player-frontend:window-background',
+          payload: readWindowBackgroundState(),
+        })
+      }
+
+      // 监听宿主窗口背景设置变化（毛玻璃/透明度切换时刷新透明背景 scrim）。
+      const initWindowBackgroundWatch = () => {
+        if (stopWindowBackgroundWatch) return
+        const settings = ctx.stores.settings || ctx.settings
+        if (!settings || !ctx.vue.watch) return
+        stopWindowBackgroundWatch = ctx.vue.watch(
+          () => {
+            const bg = settings.windowBackground || {}
+            return [
+              bg.enabled ? '1' : '0',
+              bg.frosted ? '1' : '0',
+              String(bg.transparency ?? ''),
+              settings.windowBackgroundActiveEnabled ? '1' : '0',
+              String(settings.windowBackgroundActiveFrosted ?? ''),
+            ].join('::')
+          },
+          () => {
+            pushWindowBackground()
+          },
+        )
+      }
+
       // 推送完整快照，仅在曲目切换或命令完成后调用。
       const pushSnapshot = (force = false) => {
         if (!ready && !force) return
@@ -1963,6 +2018,8 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
                 directEnter: true,
                 pluginVersion: String(ctx.manifest?.version || ''),
                 hostControls: buildHostControlsPayload(),
+                // 窗口背景有效状态：透明背景色模式据此生成 scrim
+                windowBackground: readWindowBackgroundState(),
                 appearance: buildAppearancePayload(),
               },
             })
@@ -1979,6 +2036,16 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
           case 'echo-player-frontend:command':
             handleCommand(data)
             break
+          case 'echo-player-frontend:background-mode': {
+            // postParentBridgeMessage 把字段平铺在消息顶层，兼容 payload 包裹形态
+            const mode = String(data.mode || data.payload?.mode || '')
+            // 透明背景色模式下让出覆盖层背景并隐藏主界面（style.css 按 epf-transparent-bg 生效），
+            // 切回其他背景时移除，恢复不透明覆盖层
+            document.body.classList.toggle('epf-transparent-bg', mode === 'transparent')
+            // 回推当前窗口背景状态，透明背景模式据此设置 scrim
+            pushWindowBackground()
+            break
+          }
           case 'echo-player-frontend:storage':
             void handleStorageRequest(data)
             break
@@ -2030,6 +2097,7 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         initVolumeWatch()
         initFavoriteWatch()
         initFontWatch()
+        initWindowBackgroundWatch()
         startPositionHeartbeat()
         bindHostControlsRefresh()
 
@@ -2062,6 +2130,8 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         disposed = true
         ready = false
         document.body.classList.remove('epf-overlay-open')
+        // 透明背景色的宿主侧联动（容器透明/主界面隐藏）随覆盖层一并还原
+        document.body.classList.remove('epf-transparent-bg')
         window.removeEventListener('message', handleMessage)
         window.removeEventListener('keydown', handleKeydown, true)
         unbindHostControlsRefresh()
@@ -2076,6 +2146,8 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
         stopFavoriteWatch = null
         if (stopFontWatch) stopFontWatch()
         stopFontWatch = null
+        if (stopWindowBackgroundWatch) stopWindowBackgroundWatch()
+        stopWindowBackgroundWatch = null
         if (spectrumDispose) spectrumDispose()
         spectrumDispose = null
       })

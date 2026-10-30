@@ -14,6 +14,14 @@ html, body {
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
+/* 透明背景色模式（applyCustomBackground 切换）：根层让出底色，透出宿主窗口毛玻璃/透明材质。
+   桥接模式会给 body 挂 echo-plugin-bridge 并带 !important 底色，这里需同权重覆盖。 */
+html.fx-bg-transparent, html.fx-bg-transparent body {
+  background: transparent;
+}
+html.fx-bg-transparent body.echo-plugin-bridge {
+  background: transparent!important;
+}
 body.cursor-hidden, body.cursor-hidden * {
   cursor: none!important;
 }
@@ -1909,6 +1917,10 @@ body.controls-visible #fx-fab {
 .lyric-color-row.visual-tint-row {
   grid-template-columns: 42px 1fr 58px 58px;
 }
+/* 背景颜色行带「封面 + 透明」双按钮，与视觉主色行同款 4 列排布 */
+.lyric-color-row.bg-color-row {
+  grid-template-columns: 42px 1fr 58px 58px;
+}
 .lyric-color-row.image-pick-row {
   grid-template-columns: 64px 1fr 68px;
 }
@@ -2882,6 +2894,18 @@ html.control-glass-svg-ok #fx-fab {
   opacity: .18;
 }
 .lyric-color-row.bg-cover-mode .fx-color-row-label small {
+  color: rgba(var(--fc-accent-rgb),.78);
+}
+/* 透明背景模式：拾色器显示透明材质（棋盘格）样式 */
+.lyric-color-row.bg-transparent-mode #bg-color-picker {
+  border-color: rgba(255,255,255,.26)!important;
+  background: repeating-conic-gradient(#3a3d44 0% 25%, #22252b 0% 50%) 0 0/10px 10px!important;
+  box-shadow: 0 0 0 1px rgba(var(--fc-accent-rgb),.12),0 10px 24px rgba(0,0,0,.22)!important;
+}
+.lyric-color-row.bg-transparent-mode #bg-color-picker::-webkit-color-swatch {
+  opacity: .18;
+}
+.lyric-color-row.bg-transparent-mode .fx-color-row-label small {
   color: rgba(var(--fc-accent-rgb),.78);
 }
 .cover-color-pop, .color-lab-pop {

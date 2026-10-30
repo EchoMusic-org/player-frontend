@@ -83,6 +83,9 @@ var hostRequestPending = {};
 // 状态写入合并缓存，避免滑块拖动时密集写库。
 var pendingStatePatch = null;
 var pendingStateSaveTimer = 0;
+// 宿主窗口背景有效状态（echo-player-frontend:window-background 消息推送）：
+// { enabled:窗口背景是否开启, frosted:毛玻璃, opacity:背景不透明度 0~1 }，透明背景色模式消费。
+var windowBackgroundState = { enabled: false, frosted: false, opacity: 1 };
 
 // 向父层发送宿主桥接请求。
 function postParentBridgeMessage(type, extra) {
@@ -92,6 +95,21 @@ function postParentBridgeMessage(type, extra) {
       type: type
     }, extra || {}), '*');
   } catch (e) {}
+}
+
+// 归一化并记录宿主窗口背景状态；透明背景色模式下立即重算 scrim。
+// applyCustomBackground 定义在 08 模块，消息到达时模块均已加载，直接调用是安全的。
+function applyWindowBackgroundState(payload) {
+  var raw = payload || {};
+  var opacity = Number(raw.opacity);
+  windowBackgroundState = {
+    enabled: raw.enabled === true,
+    frosted: raw.frosted === true,
+    opacity: isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1
+  };
+  if (typeof applyCustomBackground === 'function' && fx.backgroundColorMode === 'transparent') {
+    applyCustomBackground();
+  }
 }
 
 // 发起带 requestId 的宿主请求。
@@ -134,6 +152,8 @@ window.addEventListener('message', function(event) {
     data.type === 'echo-player-frontend:background-resolve-result'
   ) {
     settleHostBridgeRequest(data);
+  } else if (data.type === 'echo-player-frontend:window-background') {
+    applyWindowBackgroundState(data.payload);
   }
 });
 
