@@ -1752,20 +1752,23 @@ function createPlayerFrame(ctx, closeOverlay, storageBridge) {
       }
 
       // 订阅歌词 store，仅在歌词内容（lines/loadedHash）变化时推送给 iframe。
+      // 订阅歌词 store:用标量 getter 的 watch 代替 Pinia $subscribe。
+      // $subscribe 内部是对整个 $state 的 deep watch,每次行切换都会深遍历
+      // 全部 state(含候选歌词缓存),是行切换卡顿的来源之一;此处只依赖
+      // 四个标量字段,触发成本 O(1)。
       const initLyricStoreSubscription = () => {
         if (lyricStoreUnsub) return
         const lyricStore = ctx.stores.lyric
-        const buildStoreKey = (state) =>
+        const buildStoreKey = () =>
           [
-            Array.isArray(state?.lines) ? state.lines.length : 0,
-            String(state?.loadedHash || ''),
-            Boolean(state?.isLoading) ? '1' : '0',
-            String(state?.tips || ''),
+            Array.isArray(lyricStore.lines) ? lyricStore.lines.length : 0,
+            String(lyricStore.loadedHash || ''),
+            Boolean(lyricStore.isLoading) ? '1' : '0',
+            String(lyricStore.tips || ''),
           ].join('::')
-        lastLyricStoreKey = buildStoreKey(lyricStore)
-        if (typeof lyricStore.$subscribe === 'function') {
-          lyricStoreUnsub = lyricStore.$subscribe((mutation, state) => {
-            const nextKey = buildStoreKey(state)
+        lastLyricStoreKey = buildStoreKey()
+        if (typeof ctx.vue?.watch === 'function') {
+          lyricStoreUnsub = ctx.vue.watch(buildStoreKey, (nextKey) => {
             if (nextKey === lastLyricStoreKey) return
             lastLyricStoreKey = nextKey
             pushLyrics(false)
