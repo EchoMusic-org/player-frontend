@@ -194,6 +194,18 @@ function retireStageLyricRowMesh(mesh) {
   if (!mesh.userData) mesh.userData = {};
   mesh.userData.state = 'out';
   mesh.userData.age = 0;
+  // 捕捉退场瞬间的实际观感。上下文行的透明度远低于淡出分支旧的固定起点 0.72，
+  // 描边层和缩放同理；不捕捉的话行在开始淡出前会先跳亮放大一下，观感上闪一次。
+  // tickMesh 的淡出分支从这些值继续，只负责往 0 收。
+  var data = mesh.userData.lyric;
+  if (data) {
+    mesh.userData.outStartOpacity = getStageLyricRowOpacity(data);
+    mesh.userData.outStartReadability = data.readabilityMat ? Number(data.readabilityMat.opacity) || 0 : 0;
+    mesh.userData.outStartGlow = data.glowMat ? Number(data.glowMat.opacity) || 0 : 0;
+    mesh.userData.outStartSun = data.sunMat ? Number(data.sunMat.opacity) || 0 : 0;
+    mesh.userData.outStartSpark = getLyricSparkOpacity(data);
+  }
+  if (mesh.scale && isFinite(mesh.scale.x)) mesh.userData.outStartScale = mesh.scale.x;
   stageLyrics.outgoing.push(mesh);
   while (stageLyrics.outgoing.length > STAGE_LYRIC_MAX_OUTGOING) {
     queueLyricMeshDispose(stageLyrics.outgoing.shift());
@@ -225,6 +237,7 @@ function clearStageLyricRows() {
   stageLyrics.targetLineIndex = -1;
   stageLyrics.targetVirtualIndex = 0;
   stageLyrics.nextVirtualIndex = 1;
+  stageLyrics.rowRebasePending = false;
 }
 
 // 按新的行清单同步轨道：签名不变的行原地复用，变化的行重建，离开窗口的行淘汰。
@@ -247,6 +260,8 @@ function syncStageLyricRows(entries, redrawOnly) {
     if (old && old.signature === signature && old.mesh) {
       // 文本和图层档位都没变，直接复用，位置与透明度保持连续。
       row = old;
+      // mesh 上一帧还在轨道上，世界位置是连续的，可供重定基使用。
+      row.hasWorldHistory = true;
     } else {
       // 需要新建。旧行如果存在，说明是同一行换了档位（例如从上下文行变成当前行），
       // 直接销毁并把位置继承给新 mesh，避免出现两份同样的文字。
@@ -256,6 +271,7 @@ function syncStageLyricRows(entries, redrawOnly) {
         glow: entry.glow,
         resolutionScale: entry.resolutionScale
       });
+      var hasWorldHistory = false;
       if (old && old.mesh) {
         mesh.position.copy(old.mesh.position);
         mesh.scale.copy(old.mesh.scale);
@@ -263,16 +279,20 @@ function syncStageLyricRows(entries, redrawOnly) {
         var oldData = old.mesh.userData ? old.mesh.userData.lyric : null;
         if (oldData) setStageLyricRowOpacity(mesh.userData.lyric, getStageLyricRowOpacity(oldData), entry.isCurrent ? 0.10 : 0.06);
         mesh.userData.age = old.mesh.userData && isFinite(old.mesh.userData.age) ? old.mesh.userData.age : 0;
+        // 继承漂浮种子，升格或降格时 bob 相位不跳变。
+        if (old.mesh.userData && isFinite(old.mesh.userData.floatSeed)) mesh.userData.floatSeed = old.mesh.userData.floatSeed;
+        // 升格为当前主行时记录接管起点，tickMesh 用它把缩放从上下文档平滑过渡到完整档。
+        if (entry.variant === 'full') {
+          mesh.userData.promoteFromScale = mesh.scale.x;
+          mesh.userData.promoteBlend = 0;
+        }
         queueLyricMeshDispose(old.mesh);
         old.mesh = null;
+        // mesh 的世界位置继承自旧行，可供重定基使用。
+        hasWorldHistory = true;
       }
       stageLyrics.group.add(mesh);
-      row = { mesh: mesh, signature: signature };
-      // 换档位时继承旧行的动画中间量，否则新行对象会从目标位置直接开始，切句时上一句会瞬移。
-      if (old) {
-        row.shownOffsetY = old.shownOffsetY;
-        row.shownScale = old.shownScale;
-      }
+      row = { mesh: mesh, signature: signature, hasWorldHistory: hasWorldHistory };
     }
     row.key = entry.key;
     row.lineIndex = entry.lineIndex;
@@ -310,6 +330,9 @@ function syncStageLyricRows(entries, redrawOnly) {
   // 目标滚动相位和下一句的虚拟索引在这里算好，每帧不必重复求前缀和。
   stageLyrics.targetVirtualIndex = lyricPrimaryVirtualIndex(Math.max(0, stageLyrics.currentIdx));
   stageLyrics.nextVirtualIndex = lyricPrimaryVirtualIndex(Math.max(0, stageLyrics.currentIdx) + 1);
+  // 行清单刚重建过，下一帧 updateStageLyricRows 需要用各 mesh 的实际世界位置
+  // 重新推算相对锚点的偏移与缩放，保证切换瞬间世界坐标连续。
+  stageLyrics.rowRebasePending = true;
 }
 
 // 每帧更新上下文行与译文行。当前主行由 tickMesh 独占，这里不碰它的位置、缩放和透明度。
@@ -358,6 +381,24 @@ function updateStageLyricRows(dt, ctx) {
   var nextVirtual = isFinite(Number(stageLyrics.nextVirtualIndex))
     ? Number(stageLyrics.nextVirtualIndex)
     : lyricPrimaryVirtualIndex(targetLine + 1);
+
+  // 切行或重建行清单后，用各 mesh 的实际世界位置反推相对新锚点的偏移与缩放。
+  // 此前复用行带着相对旧锚点的偏移、降级行带着冻结的陈旧偏移，切行帧会整体下坠一槽，
+  // 降级的上一句更是从中心下方长距离升到顶部、从所有行背后穿过。
+  // 反推后世界坐标在切换瞬间严格连续：新当前行的上升就是整条轨道唯一的滚动，
+  // 正常模式下反推初值恰好等于新槽位目标，随后的缓动自然收敛为刚体平移。
+  if (stageLyrics.rowRebasePending) {
+    stageLyrics.rowRebasePending = false;
+    if (anchor && anchor.scale && anchor.scale.x > 0.0001) {
+      for (var rb = 0; rb < rows.length; rb++) {
+        var rebaseRow = rows[rb];
+        // 没有世界历史的全新行走原有路径：首帧直接吸附到目标槽位淡入。
+        if (!rebaseRow || !rebaseRow.mesh || rebaseRow.mesh === anchor || !rebaseRow.hasWorldHistory) continue;
+        rebaseRow.shownOffsetY = rebaseRow.mesh.position.y - anchor.position.y;
+        rebaseRow.shownScale = rebaseRow.mesh.scale.x / anchor.scale.x;
+      }
+    }
+  }
 
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];

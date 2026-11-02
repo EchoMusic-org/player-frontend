@@ -2724,7 +2724,19 @@ function updateStageLyrics3D(dt) {
       } else {
         // 普通舞台歌词在封面前方漂浮。
         mesh.userData.skullMouthMeshLocked = false;
-        mesh.scale.setScalar(0.96 + a * 0.055 + breathe + bass * 0.038 + beatPulse * 0.014);
+        // 从上下文行升格为当前行时，缩放从继承的上下文档平滑过渡到完整档，
+        // 避免切行瞬间突兀放大，与位置的 0.075 缓动保持同量级的接管节奏。
+        var promoteBlend = 1;
+        if (mesh.userData.promoteBlend != null && mesh.userData.promoteBlend < 1) {
+          mesh.userData.promoteBlend = Math.min(1, mesh.userData.promoteBlend + dt / 0.36);
+          promoteBlend = mesh.userData.promoteBlend;
+          promoteBlend = promoteBlend * promoteBlend * (3 - 2 * promoteBlend);
+        }
+        var currentScale = 0.96 + a * 0.055 + breathe + bass * 0.038 + beatPulse * 0.014;
+        if (promoteBlend < 1) {
+          currentScale = mesh.userData.promoteFromScale + (currentScale - mesh.userData.promoteFromScale) * promoteBlend;
+        }
+        mesh.scale.setScalar(currentScale);
         mesh.position.y += ((0.18 + Math.sin(t * 0.55 + seed) * 0.055 + Math.sin(t * 1.35 + seed) * 0.014) - mesh.position.y) * 0.075;
         mesh.position.z += ((1.48 + Math.cos(t * 0.48 + seed) * 0.080) - mesh.position.z) * 0.080;
         mesh.rotation.z = Math.sin(t * 0.34 + seed) * 0.018;
@@ -2753,23 +2765,35 @@ function updateStageLyrics3D(dt) {
       }
       return true;
     }
-    // 淡出歌词透明度随退场曲线降低。
-    opacity = (1 - a) * 0.72 * shelfDetailLyricProfile.outgoing;
+    // 淡出歌词透明度随退场曲线降低。起点用 retireStageLyricRowMesh 捕捉到的实际透明度，
+    // 淡出从当前亮度继续往 0 收；旧的固定起点 0.72 比上下文行亮一倍，行会先闪亮再淡出。
+    // outStartOpacity 缺失时退回旧行为，兼容所有进入淡出队列的路径。
+    var outFade = 1 - a;
+    opacity = outFade * (isFinite(mesh.userData.outStartOpacity) ? mesh.userData.outStartOpacity : 0.72) * shelfDetailLyricProfile.outgoing;
     if (data.textMat) data.textMat.uniforms.uOpacity.value = opacity;
-    if (data.readabilityMat) data.readabilityMat.opacity = opacity * (shelfDetailOpen ? shelfDetailLyricProfile.readability : 0.58);
+    if (data.readabilityMat) data.readabilityMat.opacity = outFade * (isFinite(mesh.userData.outStartReadability)
+      ? mesh.userData.outStartReadability
+      : opacity * (shelfDetailOpen ? shelfDetailLyricProfile.readability : 0.58));
     if (data.textMat && data.textMat.uniforms.uSolar) data.textMat.uniforms.uSolar.value *= shelfDetailOpen ? 0.72 : 0.86;
-    if (data.glowMat) data.glowMat.opacity = lyricGlowStrength > 0 ? (shelfDetailOpen ? Math.min(shelfDetailLyricProfile.glowCap * 0.40, opacity * 0.05 * lyricGlowStrength) : opacity * 0.08 * lyricGlowStrength) : 0;
+    if (data.glowMat) data.glowMat.opacity = lyricGlowStrength > 0 && isFinite(mesh.userData.outStartGlow)
+      ? outFade * mesh.userData.outStartGlow
+      : (lyricGlowStrength > 0 ? (shelfDetailOpen ? Math.min(shelfDetailLyricProfile.glowCap * 0.40, opacity * 0.05 * lyricGlowStrength) : opacity * 0.08 * lyricGlowStrength) : 0);
     if (data.sparkMat) {
       // 淡出歌词的火花快速消散。
-      var outgoingSpark = lyricGlowStrength > 0 && fx.lyricGlowParticles && !shelfDetailOpen ? Math.max(opacity * 0.24 * lyricGlowStrength, (1 - a) * 0.18 * lyricGlowStrength) : 0;
+      var outgoingSpark = lyricGlowStrength > 0 && fx.lyricGlowParticles && !shelfDetailOpen && isFinite(mesh.userData.outStartSpark)
+        ? outFade * mesh.userData.outStartSpark
+        : 0;
       setLyricSparkOpacity(data, outgoingSpark);
       setLyricSparkSize(data, 0.046 + (1 - a) * 0.020);
     }
-    if (data.sunMat) data.sunMat.opacity = lyricGlowStrength > 0 && !shelfDetailOpen ? opacity * 0.08 * lyricGlowStrength : 0;
+    if (data.sunMat) data.sunMat.opacity = lyricGlowStrength > 0 && !shelfDetailOpen && isFinite(mesh.userData.outStartSun)
+      ? outFade * mesh.userData.outStartSun
+      : 0;
     // 淡出歌词向后上方轻移。
     mesh.position.z -= dt * 0.26;
     mesh.position.y += dt * 0.08;
-    mesh.scale.setScalar(0.98 - a * 0.06);
+    // 缩放同样从退场瞬间的实际值继续收缩，上下文行比固定起点 0.98 小，直接套会先放大一下。
+    mesh.scale.setScalar((isFinite(mesh.userData.outStartScale) ? mesh.userData.outStartScale : 0.98) - a * 0.06);
     return a < 1;
   }
   // 更新当前歌词。
