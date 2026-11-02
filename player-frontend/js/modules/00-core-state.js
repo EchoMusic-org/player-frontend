@@ -540,8 +540,8 @@ var fxDefaults = {
   floatLayer: false, cinema: true, edge: false, bloom: false, lyricGlow: true,
   // AI 立体增强模式：off 关闭，local 使用本地模型，cloud 请求云端深度服务。
   aiDepthMode: 'off',
-  // 云端深度服务基础地址，留空时不发起云端请求。
-  aiDepthCloudApi: '',
+  // 云端深度服务基础地址，留空时不发起云端请求；默认指向自建服务。
+  aiDepthCloudApi: 'https://image-depth.928233.xyz',
   // 歌词辉光是否随节拍增强。
   lyricGlowBeat: true,
   // 是否启用歌词周围的辉光粒子。
@@ -693,7 +693,7 @@ var PACKAGED_DEFAULT_FX_SNAPSHOT = Object.freeze({
   cinema: true,
   edge: false,
   aiDepthMode: 'off',
-  aiDepthCloudApi: '',
+  aiDepthCloudApi: 'https://image-depth.928233.xyz',
   bloom: false,
   lyricGlow: true,
   lyricGlowBeat: true,
