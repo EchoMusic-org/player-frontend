@@ -31,6 +31,11 @@ var mainLoopStarted = false;
 var mainLoopErrorReported = false;
 // 各视觉步骤错误上报标记。
 var visualStepErrorReported = {};
+// 音域预设音频帧：模块级单对象反复覆写，避免每帧新建 13 字段字面量（预设未激活时不构建）
+var sonicAudioFrame = { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, presence: 0, brilliance: 0, air: 0, kickEnvelope: 0, energy: 0, treble: 0, beat: 0 };
+// 缩略封面节点缓存与上次缩放值：每帧省掉 getElementById 与重复样式写入
+var thumbCoverEl = null;
+var lastThumbScale = 1;
 function reportMainLoopError(error) {
   // 主循环异常只上报一次，避免同一错误每帧刷屏；桥接层仍继续工作，控制命令不受影响。
   if (mainLoopErrorReported) return;
@@ -377,9 +382,14 @@ function animate() {
     backCoverGroup.rotation.copy(particles.rotation);
   }
   updateSkullParticleLayer(dt);
-  // 音域预设音频帧
-  var sonicAudioFrame = { subBass: bass, bass: bass, lowMid: mid, mid: mid, highMid: treble, presence: treble, brilliance: treble, air: treble, kickEnvelope: beatPulse, energy: audioEnergy, treble: treble, beat: beatPulse };
+  // 音域预设音频帧：仅预设加载时构建并复用单对象，避免每帧 13 字段字面量分配
   if (typeof MineradioSonicTopography !== 'undefined' && MineradioSonicTopography.update) {
+    sonicAudioFrame.subBass = bass; sonicAudioFrame.bass = bass;
+    sonicAudioFrame.lowMid = mid; sonicAudioFrame.mid = mid;
+    sonicAudioFrame.highMid = treble; sonicAudioFrame.presence = treble;
+    sonicAudioFrame.brilliance = treble; sonicAudioFrame.air = treble;
+    sonicAudioFrame.kickEnvelope = beatPulse; sonicAudioFrame.energy = audioEnergy;
+    sonicAudioFrame.treble = treble; sonicAudioFrame.beat = beatPulse;
     safeVisualStep('sonic-topography', function(){ MineradioSonicTopography.update(dt, { fx: fx, scene: scene, audio: sonicAudioFrame }); });
   }
 
@@ -390,9 +400,12 @@ function animate() {
   if (currentIdx >= 0) {
     // 缩略封面随低频轻微缩放。
     var s = 1 + bass * 0.08;
-    // 缩略封面节点。
-    var thumbCoverEl = document.getElementById('thumb-cover');
-    if (thumbCoverEl) thumbCoverEl.style.transform = 'scale(' + s + ')';
+    // 节点引用缓存 + 差分写入：每帧 getElementById 与无谓的样式写入都省掉
+    if (!thumbCoverEl || !thumbCoverEl.isConnected) thumbCoverEl = document.getElementById('thumb-cover');
+    if (thumbCoverEl && Math.abs(s - lastThumbScale) > 0.002) {
+      lastThumbScale = s;
+      thumbCoverEl.style.transform = 'scale(' + s.toFixed(3) + ')';
+    }
   }
 
 // 渲染当前场景。

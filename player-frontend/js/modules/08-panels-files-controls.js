@@ -225,22 +225,38 @@ function setProgressVisual(percent) {
   if (thumb) thumb.style.left = percent + '%';
 }
 // 刷新播放进度 UI。
+// 进度/文本差分游标：200ms 轮询下暂停或无变化时跳过 DOM 写入与字符串拼接
+var lastProgressPercent = -1;
+var lastDurationSec = -1;
+var lastShownSecond = -1;
 function updatePlaybackProgressUi() {
   // 当前歌曲总时长。
   var durationSec = getPlaybackDurationSeconds();
   // 当前播放秒数。
   var currentSec = getPlaybackCurrentSeconds();
   if (durationSec > 0 && currentSec > durationSec) currentSec = durationSec;
-  setProgressVisual(durationSec > 0 ? (currentSec / durationSec * 100) : 0);
-  // 时间显示节点。
-  var timeDisplay = document.getElementById('time-display');
-  if (timeDisplay) timeDisplay.textContent = formatProgramTime(currentSec) + ' / ' + (durationSec > 0 ? formatProgramTime(durationSec) : '0:00');
+  var percent = durationSec > 0 ? (currentSec / durationSec * 100) : 0;
+  if (Math.abs(percent - lastProgressPercent) > 0.05 || durationSec !== lastDurationSec) {
+    lastProgressPercent = percent;
+    lastDurationSec = durationSec;
+    setProgressVisual(percent);
+    // 时间显示节点。
+    var timeDisplay = document.getElementById('time-display');
+    if (timeDisplay) timeDisplay.textContent = formatProgramTime(currentSec) + ' / ' + (durationSec > 0 ? formatProgramTime(durationSec) : '0:00');
+  } else {
+    // 秒级变化仍需更新时间文本（同一进度百分比内时间在走）
+    var shownSecond = Math.floor(currentSec);
+    if (shownSecond !== lastShownSecond) {
+      lastShownSecond = shownSecond;
+      var timeDisplay = document.getElementById('time-display');
+      if (timeDisplay) timeDisplay.textContent = formatProgramTime(currentSec) + ' / ' + (durationSec > 0 ? formatProgramTime(durationSec) : '0:00');
+    }
+  }
 }
 // 本地刷新播放进度和歌词高亮状态，不向宿主请求数据。
 setInterval(function(){
   if (!audio) { updatePlaybackProgressUi(); return; }
   updatePlaybackProgressUi();
-  if (audio.currentTime) updateLyricsHighlight();
 }, 200);
 
 // ============================================================
